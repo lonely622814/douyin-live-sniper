@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import os
 import pathlib
 import re
 import secrets
@@ -63,6 +64,18 @@ class Controller:
         self.timings: dict[str, float] = {}
         self._action_lock = threading.Lock()
         self._stop = threading.Event()
+        # ── 诊断日志（事后对账用）──
+        self._diag_lock = threading.Lock()
+        self._diag_cleaned = 0.0
+        self.watch_cycles = 0                 # 未开播时刷新的轮次
+        self.last_reload_ts = "-"             # 最近一次刷新的时刻（时分秒.毫秒）
+        self.last_reload_at: float | None = None
+        self.diag(
+            f"===== 启动 ===== 房间={cfg.room_url or '(未设置)'} "
+            f"刷新间隔={cfg.refresh_interval:g}s 刷新方式={'强制' if cfg.refresh_mode == 'hard' else '普通'} "
+            f"等加载={cfg.refresh_wait_load} 秒抢={cfg.trigger_live_start} 0点={cfg.trigger_midnight} "
+            f"演练={cfg.dry_run} 端口={cfg.cdp_port}"
+        )
         self.log("控制台已启动（纯 JS 版）")
 
     # ---------- 日志 / 状态 ----------
@@ -71,6 +84,43 @@ class Controller:
         stamp = time.strftime("%H:%M:%S")
         self.logs.append({"ts": stamp, "msg": message})
         print(f"[{stamp}] {message}")
+        # 重要事件同时落盘，重启后也查得到
+        if message[:1] in ("★", "✅", "⚠", "⛔"):
+            self.diag(message)
+
+    # ---------- 诊断日志 ----------
+
+    @staticmethod
+    def diag_dir() -> pathlib.Path:
+        path = ROOT / "logs"
+        path.mkdir(exist_ok=True)
+        return path
+
+    def diag(self, message: str) -> None:
+        """写诊断日志：按天一个文件、保留 7 天。
+
+        只记"能事后对账"的东西：每一轮刷新、判定到开播、送出、异常。
+        不记页面每一个动作，一天几 MB。
+        """
+        try:
+            now = time.time()
+            stamp = time.strftime("%H:%M:%S", time.localtime(now))
+            millis = int(now * 1000) % 1000
+            path = self.diag_dir() / time.strftime("watch-%Y%m%d.log", time.localtime(now))
+            with self._diag_lock:
+                with path.open("a", encoding="utf-8") as fh:
+                    fh.write(f"{stamp}.{millis:03d} {message}\n")
+                if now - self._diag_cleaned > 3600:
+                    self._diag_cleaned = now
+                    cutoff = now - 7 * 86400
+                    for old in self.diag_dir().glob("watch-*.log"):
+                        try:
+                            if old.stat().st_mtime < cutoff:
+                                old.unlink()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
     def timing(self, name: str, milliseconds: float) -> None:
         self.timings[name] = round(milliseconds, 1)
@@ -119,6 +169,13 @@ class Controller:
             "like_rate": self.cfg.like_rate,
             "like_count": self.like_count,
             "next_trigger": next_trigger,
+            "watch_cycles": self.watch_cycles,
+            "last_reload_time": self.last_reload_ts,
+            "last_reload_age": (
+                round(time.monotonic() - self.last_reload_at, 1)
+                if self.last_reload_at
+                else None
+            ),
             "logs": list(self.logs)[-60:],
         }
 
@@ -464,7 +521,9 @@ class Controller:
                     )
 
                 # ① 页面自己更新时，这里就能抓到（另一条路是页面里那个 80ms 的 JS 监听）
-                if self.flow.room_live().get("live"):
+                quick = self.flow.room_live()
+                if quick.get("live"):
+                    self.diag(f"★ 开播判定（页面自查）页面{self._sig(quick)}")
                     self.on_live_detected("页面自查")
                     continue
 
@@ -477,6 +536,12 @@ class Controller:
                 #    页面一旦渲染出"直播中"，最多 70ms 后就被抓住。
                 t_reload = time.monotonic()
                 last_reload = t_reload          # 间隔从"刷新这一刻"开始算，周期=间隔
+                self.watch_cycles += 1
+                cycle_no = self.watch_cycles
+                self.last_reload_at = t_reload
+                self.last_reload_ts = (
+                    time.strftime("%H:%M:%S") + f".{int(time.time() * 1000) % 1000:03d}"
+                )
                 try:
                     self.flow.set_reload_mode(self.cfg.refresh_mode == "hard")
                     self.flow.reload_page()
@@ -484,11 +549,13 @@ class Controller:
                     self.flow.attach()
                 self.monitor_installed = False      # 页面重载了，注入的脚本没了
                 found = None
+                info_last: dict = {}
                 if self.cfg.refresh_wait_load:
                     # 勾了"等页面加载完再计时"：先等到页面能回应，间隔从那一刻开始算
                     while (time.monotonic() < t_reload + 12.0
                            and not self._stop.is_set()):
                         info = self.flow.room_live()
+                        info_last = info
                         if info.get("live"):
                             found = (time.monotonic() - t_reload) * 1000
                             break
@@ -500,17 +567,28 @@ class Controller:
                     # 不等待：刷新之后的整个间隔都用来判定，页面一渲染出直播中就抓住
                     deadline = t_reload + interval
                     while time.monotonic() < deadline and not self._stop.is_set():
-                        if self.flow.room_live().get("live"):
+                        info_last = self.flow.room_live()
+                        if info_last.get("live"):
                             found = (time.monotonic() - t_reload) * 1000
                             break
                         time.sleep(0.07)
                 if found is not None:
+                    self.diag(
+                        f"★ 开播判定 #{cycle_no} 刷新{self.last_reload_ts} "
+                        f"耗时{found:.0f}ms 页面{self._sig(info_last)}"
+                    )
                     self.on_live_detected(f"刷新后 {found:.0f} ms 判定到")
                     continue
 
                 # 这轮没开播：收拾浏览器（重装监听、确认还在目标直播间）
                 cost = (time.monotonic() - t_reload) * 1000
                 self.housekeeping()
+                # 每一轮都落一行：这就是事后对账的"心跳"，能看出程序当时在不在干活
+                self.diag(
+                    f"#{cycle_no} 刷新{self.last_reload_ts} 耗时{cost:.0f}ms "
+                    f"页面{self._sig(info_last)} 心跳={self._heartbeat_text()} "
+                    f"查询{self.monitor_ticks} → 未开播"
+                )
                 # 每 2 秒就刷一轮，日志不能每轮都写，不然会淹没运行日志
                 if time.monotonic() - last_cycle_log > 60:
                     last_cycle_log = time.monotonic()
@@ -523,6 +601,23 @@ class Controller:
             # 这里的等待决定了"最坏情况多久才能发现开播"：原来是无条件 2 秒，
             # 加上刷新本身和后面的收拾动作，一轮能拖到 5~10 秒。改成几乎不睡。
             time.sleep(0.05)
+
+    @staticmethod
+    def _sig(info: dict) -> str:
+        """把页面读到的原始信号压成一行——事后能区分"抖音页面没更新"还是"选择器没抓到"。"""
+        if not info:
+            return "[页面还没响应]"
+        return (
+            f"[未开播={int(bool(info.get('offline')))} "
+            f"礼物栏={int(bool(info.get('hasGift')))} "
+            f"视频={int(bool(info.get('playing')))}]"
+        )
+
+    def _heartbeat_text(self) -> str:
+        """页面 JS 监听的心跳：它是"程序到底在不在监听"的直接证据。"""
+        if not self.last_heartbeat:
+            return "无(页面JS未上报)"
+        return f"{time.monotonic() - self.last_heartbeat:.1f}s前"
 
     def on_live_detected(self, how: str) -> None:
         """判定到开播：停止刷新（状态一变 True，主循环就不再刷），并按需触发秒抢。
@@ -784,6 +879,14 @@ class Controller:
                 self.cfg.update({"rooms": rooms[:30]})
                 self.log(f"已保存直播间到历史：{note or url}")
                 return {"ok": True, "note": f"已保存（共 {len(rooms[:30])} 个）"}
+            if name == "open_logs":
+                # 打开诊断日志文件夹，出问题时直接把里面的文件发出来
+                path = self.diag_dir()
+                try:
+                    os.startfile(str(path))      # noqa: S606 - Windows 桌面程序
+                    return {"ok": True, "note": f"已打开 {path.name}"}
+                except Exception as exc:
+                    return {"ok": False, "note": f"打不开：{exc}"}
             if name == "probe_like":
                 self.log("开始探测点赞接口：点一下屏幕，抓期间的网络请求…")
                 r = self.flow.probe_like()

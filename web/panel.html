@@ -152,6 +152,7 @@
   /* 耗时小格：标签在上、数值在下，窄格子也不会被截 */
   .stat.c{flex-direction:column;align-items:flex-start;gap:1px;padding:7px 11px}
   .stat.c span{max-width:100%}
+  button.mini{padding:4px 10px;font-size:11.5px;border-radius:8px;font-weight:500}
 
   /* 运行日志独占右列整个高度 */
   .cols>.logbox{grid-column:2;min-height:0}
@@ -282,6 +283,7 @@
         <div class="stat"><span>监听频率</span><b>80 ms</b></div>
         <div class="stat"><span>首发监听</span><b id="s-gift">-</b></div>
         <div class="stat"><span>已查询</span><b id="s-ticks">-</b></div>
+        <div class="stat"><span>最近刷新</span><b id="s-reload">-</b></div>
       </div>
       <div class="hr"></div>
       <div class="sect">每一步花了多少毫秒</div>
@@ -291,7 +293,8 @@
   </div>
 
   <div class="box logbox">
-    <div class="cap">运行日志<em>全部</em></div>
+    <div class="cap">运行日志<em>全部</em>
+      <button class="mini" id="btn-openlogs">诊断日志</button></div>
     <div id="log"></div>
   </div>
 
@@ -409,6 +412,7 @@ $("btn-prepare").onclick=()=>act("btn-prepare","prepare");
 $("btn-refresh").onclick=()=>act("btn-refresh","refresh_accompany");
 $("btn-cal").onclick=()=>act("btn-cal","calibrate");
 $("btn-test").onclick=()=>act("btn-test","dry_run_test");
+$("btn-openlogs").onclick=()=>act("btn-openlogs","open_logs");
 $("btn-send").onclick=()=>{
   if(!confirm("确认现在送出「为你闪耀」？\n\n真的花 9 钻，不可撤销。"))return;
   act("btn-send","send_now");
@@ -459,6 +463,14 @@ async function tick(){
     $("s-beat").textContent=beat==null?"-":(beat.toFixed(1)+" 秒前");
     $("s-gift").textContent=s.first_gift||"还没有人送出";
     $("s-ticks").textContent=(s.monitor_ticks||0)+" 次";
+    /* 最近一次刷新：事后对账要看的就是这一条——它证明"程序当时在不在按节奏刷" */
+    if(s.last_reload_age==null){
+      $("s-reload").textContent="还没刷过";
+      $("s-reload").title="";
+    }else{
+      $("s-reload").textContent=s.last_reload_age.toFixed(1)+"s 前";
+      $("s-reload").title=`第 ${s.watch_cycles||0} 轮 · 最近刷新 ${s.last_reload_time||"-"}`;
+    }
     if(s.live_grab!==undefined&&s.live_grab!==cfg.trigger_live_start){cfg.trigger_live_start=s.live_grab;paint();}
     times(s.timings||{});
 

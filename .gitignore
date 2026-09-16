@@ -4,6 +4,7 @@ chrome-profile/
 # ── 个人配置与标定数据（每台机器不一样）──
 config.json
 data/
+logs/
 
 # ── Python ──
 __pycache__/
