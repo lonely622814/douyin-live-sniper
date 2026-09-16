@@ -70,6 +70,9 @@ class Controller:
         self.watch_cycles = 0                 # 未开播时刷新的轮次
         self.last_reload_ts = "-"             # 最近一次刷新的时刻（时分秒.毫秒）
         self.last_reload_at: float | None = None
+        self.page_challenge = False           # 抖音是否把页面换成了验证码中间页
+        self.page_title = "-"
+        self.page_heap_mb: float | None = None
         self.diag(
             f"===== 启动 ===== 房间={cfg.room_url or '(未设置)'} "
             f"刷新间隔={cfg.refresh_interval:g}s 刷新方式={'强制' if cfg.refresh_mode == 'hard' else '普通'} "
@@ -176,6 +179,9 @@ class Controller:
                 if self.last_reload_at
                 else None
             ),
+            "challenge": self.page_challenge,
+            "page_title": self.page_title,
+            "page_heap_mb": self.page_heap_mb,
             "logs": list(self.logs)[-60:],
         }
 
@@ -522,13 +528,16 @@ class Controller:
 
                 # ① 页面自己更新时，这里就能抓到（另一条路是页面里那个 80ms 的 JS 监听）
                 quick = self.flow.room_live()
+                self._notice_page_state(quick)
                 if quick.get("live"):
                     self.diag(f"★ 开播判定（页面自查）页面{self._sig(quick)}")
                     self.on_live_detected("页面自查")
                     continue
 
                 # ② 没到刷新点：短睡继续查。这一小圈不做任何别的 CDP 动作，别浪费时间
-                if time.monotonic() - last_reload < interval:
+                #    注意：一旦被风控换成验证码页，就把节奏放慢，别继续猛刷加重风控
+                gap = interval * (4.0 if self.page_challenge else 1.0)
+                if time.monotonic() - last_reload < gap:
                     time.sleep(0.07)
                     continue
 
@@ -568,6 +577,7 @@ class Controller:
                     deadline = t_reload + interval
                     while time.monotonic() < deadline and not self._stop.is_set():
                         info_last = self.flow.room_live()
+                        self._notice_page_state(info_last)
                         if info_last.get("live"):
                             found = (time.monotonic() - t_reload) * 1000
                             break
@@ -589,6 +599,9 @@ class Controller:
                     f"页面{self._sig(info_last)} 心跳={self._heartbeat_text()} "
                     f"查询{self.monitor_ticks} → 未开播"
                 )
+                # 每 5 轮记一次页面内存，方便事后看"刷新久了是不是越来越占内存"
+                if cycle_no % 5 == 0:
+                    self._log_page_metrics(cycle_no)
                 # 每 2 秒就刷一轮，日志不能每轮都写，不然会淹没运行日志
                 if time.monotonic() - last_cycle_log > 60:
                     last_cycle_log = time.monotonic()
@@ -620,6 +633,42 @@ class Controller:
         if not self.last_heartbeat:
             return "无(页面JS未上报)"
         return f"{time.monotonic() - self.last_heartbeat:.1f}s前"
+
+    def _notice_page_state(self, info: dict) -> None:
+        """识别抖音的风控页面（验证码/中间页）。
+
+        被换成验证码页之后，页面里根本没有直播间，程序会一直判成"未开播"，
+        用户却以为程序在正常守候。所以必须单独认出来 + 明显提示 + 自动降频。
+        """
+        if not info:
+            return
+        title = str(info.get("title") or "").strip()
+        if title and title != self.page_title:
+            self.page_title = title
+        challenge = bool(info.get("challenge"))
+        if challenge == self.page_challenge:
+            return
+        self.page_challenge = challenge
+        if challenge:
+            self.log(
+                f"⚠ 抖音把页面换成了「{title or '验证码页'}」：现在判不出开播，"
+                f"请到直播间那个 Chrome 窗口手动过一次验证（刷新节奏已自动放慢）"
+            )
+            self.diag(f"⚠ 风控页面：title={title or '空'} 已自动降频，等人工过验证")
+        else:
+            self.log("页面恢复正常，继续守候")
+            self.diag(f"页面恢复正常：title={title or '空'}")
+
+    def _log_page_metrics(self, cycle_no: int) -> None:
+        """把页面自身的内存写进诊断日志——用来看"刷久了是不是越来越占内存"。"""
+        m = self.flow.page_metrics()
+        if not m:
+            return
+        self.page_heap_mb = m.get("heap_mb")
+        self.diag(
+            f"内存 第{cycle_no}轮 页面JS堆={m.get('heap_mb')}MB "
+            f"DOM节点={m.get('nodes')} 文档={m.get('docs')}"
+        )
 
     def on_live_detected(self, how: str) -> None:
         """判定到开播：停止刷新（状态一变 True，主循环就不再刷），并按需触发秒抢。

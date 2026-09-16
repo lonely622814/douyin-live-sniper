@@ -33,7 +33,7 @@ class Config:
     # 两种刷新方式各自的间隔（秒）：刷新完等这么久再刷下一轮
     refresh_interval_hard: float = 2.0   # 强制刷新（Ctrl+F5）
     refresh_interval_soft: float = 1.0   # 普通刷新（F5）
-    refresh_interval: float = 1.0        # 统一刷新间隔（秒），到点就刷，不等加载
+    refresh_interval: float = 5.0        # 统一刷新间隔（秒）。别设太小：整页刷新会被风控盯上
     refresh_wait_load: bool = False      # 是否等页面加载完再判断（默认不等）
     # ── 点赞 ──
     like_enabled: bool = False

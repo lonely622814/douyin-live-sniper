@@ -449,8 +449,17 @@ async function tick(){
     $("cd").title=nt;
 
     const live=s.live===true;
-    $("h-live").textContent=live?"正在开播":(s.live===false?"未开播 · 守候中":"未知");
-    $("h-live").className=live?"green":"amber";
+    if(s.challenge){
+      /* 风控页面：这时候判不出开播，必须让人看见 */
+      $("h-live").textContent="⚠ 抖音要求验证码";
+      $("h-live").className="red";
+      $("h-live").title="页面被换成了验证码页（title："+(s.page_title||"-")+"），"+
+        "请到直播间那个 Chrome 窗口手动过一次验证；程序已自动放慢刷新节奏";
+    }else{
+      $("h-live").textContent=live?"正在开播":(s.live===false?"未开播 · 守候中":"未知");
+      $("h-live").className=live?"green":"amber";
+      $("h-live").title=s.page_title&&s.page_title!=="-"?("页面标题："+s.page_title):"";
+    }
     $("h-armed").textContent=s.armed?"已架好 · 可秒送":"未架好";
     $("h-armed").className=s.armed?"green":"amber";
     const p=s.panel||"";

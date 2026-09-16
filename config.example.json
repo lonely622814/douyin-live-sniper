@@ -13,7 +13,7 @@
   "refresh_mode": "soft",
   "refresh_interval_hard": 2.0,
   "refresh_interval_soft": 1.0,
-  "refresh_interval": 2.0,
+  "refresh_interval": 5.0,
   "refresh_wait_load": false,
   "like_enabled": false,
   "like_mode": "js",

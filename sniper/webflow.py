@@ -137,6 +137,8 @@ class WebFlow:
         self.port = port
         self.room_url = room_url
         self.session: cdp.CDP | None = None
+        self._acc_session: cdp.CDP | None = None   # 陪伴之旅 iframe 的会话（复用）
+        self._acc_ws: str = ""
         self.log: list[str] = []
 
     # ---------- 基础设施 ----------
@@ -254,13 +256,39 @@ class WebFlow:
                       const offline = /暂未开播|未开播|已下播|直播已结束/.test(text);
                       const hasGift = !!document.querySelector('[data-e2e="gifts-container"]');
                       const video = document.querySelector('video');
+                      const title = document.title || '';
+                      // 抖音风控会把页面换成"验证码/中间页"，这时候页面里什么都没有，
+                      // 程序会一直判成"未开播"——必须单独认出来，否则永远等不到开播。
+                      const challenge = /验证码|中间页|安全验证|captcha/i.test(title)
+                                        || /验证码|安全验证/.test(text.slice(0, 200));
                       return {offline: offline, hasGift: hasGift,
                               playing: video ? !video.paused : false,
+                              title: title.slice(0, 40), challenge: challenge,
                               live: hasGift && !offline};
                     })()"""
                 )
                 or {}
             )
+        except Exception:
+            return {}
+
+    def page_metrics(self) -> dict:
+        """页面自己的内存占用（给诊断日志用）。CDP 的一次轻量调用，不碰页面 DOM。"""
+        try:
+            session = self.attach()
+            try:
+                session.call("Performance.enable")
+            except Exception:
+                pass
+            metrics = {
+                m["name"]: m["value"]
+                for m in session.call("Performance.getMetrics", timeout=6).get("metrics", [])
+            }
+            return {
+                "heap_mb": round(metrics.get("JSHeapUsedSize", 0) / 1048576, 1),
+                "nodes": int(metrics.get("Nodes", 0)),
+                "docs": int(metrics.get("Documents", 0)),
+            }
         except Exception:
             return {}
 
@@ -606,13 +634,37 @@ class WebFlow:
         return None
 
     def _accompany_session(self) -> cdp.CDP | None:
+        """陪伴之旅 iframe 的调试会话。
+
+        这里**复用**会话：早期版本每次调用都新建一条 WebSocket 和一个读线程，
+        反复刷新状态会一点点泄漏线程和句柄（开一整晚就明显了）。
+        只有在 iframe 被重建（调试地址变了）时才换新的。
+        """
         target = self.accompany_target()
         if not target:
+            self._drop_accompany()
             return None
+        ws = target.get("webSocketDebuggerUrl") or ""
+        if self._acc_session is not None and self._acc_ws == ws:
+            return self._acc_session
+        self._drop_accompany()
         try:
-            return cdp.CDP(target["webSocketDebuggerUrl"], timeout=8)
+            self._acc_session = cdp.CDP(ws, timeout=8)
+            self._acc_ws = ws
         except Exception:
+            self._acc_session = None
+            self._acc_ws = ""
             return None
+        return self._acc_session
+
+    def _drop_accompany(self) -> None:
+        if self._acc_session is not None:
+            try:
+                self._acc_session.close()
+            except Exception:
+                pass
+        self._acc_session = None
+        self._acc_ws = ""
 
     def page_text(self) -> str:
         session = self._accompany_session()
