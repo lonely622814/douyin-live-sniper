@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>为你闪耀 · 抢送控制台</title>
+<style>
+  :root{
+    --bg:#0a0e15; --card:#131b27; --card2:#0f1621; --line:#1e2836; --line2:#26323f;
+    --fg:#e9eff8; --dim:#93a0b3; --dim2:#68758a;
+    --blue:#4f8cff; --green:#12c48b; --red:#ff5c72; --amber:#ffb020;
+    --r:14px; --gap:13px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;overflow-x:hidden}
+  body{
+    background:radial-gradient(1100px 520px at 18% -12%,#132133 0%,rgba(10,14,21,0) 60%),var(--bg);
+    color:var(--fg);display:flex;flex-direction:column;overflow:hidden;
+    font:13.5px/1.5 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+  }
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#26323f;border-radius:10px;
+    border:3px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:#33455a;background-clip:content-box}
+  .green{color:var(--green)!important} .amber{color:var(--amber)!important}
+  .blue{color:var(--blue)!important} .red{color:var(--red)!important}
+
+  /* ── 顶栏 ── */
+  header{flex:0 0 auto;padding:8px 24px 0;border-bottom:1px solid var(--line);
+    background:rgba(13,19,28,.72)}
+  .brand{text-align:center;font-size:16.5px;font-weight:700;letter-spacing:5px;padding:1px 0 7px}
+  .brand em{font-style:normal;color:var(--blue);letter-spacing:0}
+  .hstat{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 20px;
+    padding:0 0 7px;font-size:13px;color:var(--dim)}
+  .hstat .hi{display:flex;align-items:center;gap:8px;white-space:nowrap}
+  .hstat b{color:var(--fg);font-family:Consolas,monospace;font-weight:600}
+  .hstat .sep{width:1px;height:14px;background:var(--line2)}
+  .hstat .big b{font-size:19px;line-height:1}
+  .led{width:9px;height:9px;border-radius:50%;background:#3a4658;flex:0 0 auto}
+  .led.on{background:var(--green);box-shadow:0 0 0 4px rgba(18,196,139,.16);animation:bp 2s infinite}
+  @keyframes bp{50%{opacity:.45}}
+
+  /* ── 主体：左边 2×2 + 底下横一条运行状态，右边运行日志占满整列 ── */
+  .cols{flex:1;min-height:0;display:grid;padding:12px 24px 14px;gap:var(--gap);
+    grid-template-columns:minmax(0,2fr) minmax(300px,1fr)}
+  /* 左侧四块 + 底部横条：每块按自己的内容高度，空白只留在块与块之间 */
+  .main{min-width:0;min-height:0;display:grid;gap:var(--gap);
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    grid-auto-rows:min-content;align-content:space-between;
+    overflow-y:auto;overflow-x:hidden}
+  .main>.wide{grid-column:1/-1}
+
+  /* ── 卡片 ── */
+  /* 普通块按内容保底（比例分不够就撑住，绝不裁）；日志块可以压到 190px，其余给日志 */
+  .box{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+    padding:10px 14px 11px;display:flex;flex-direction:column;gap:8px;min-width:0;
+    min-height:0;overflow:hidden}
+  .logbox{min-height:190px}
+  .box.spread{justify-content:space-between}
+  .cap{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:700;color:var(--fg);
+    flex:0 0 auto}
+  .cap::before{content:"";width:3px;height:12px;border-radius:2px;background:var(--blue);flex:0 0 auto}
+  .cap::after{content:"";flex:1;height:1px;
+    background:linear-gradient(90deg,var(--line2),rgba(38,50,63,0))}
+  .cap em{font-style:normal;font-size:12px;font-weight:500;color:var(--dim2)}
+  .sub{font-size:12.5px;color:var(--dim2);line-height:1.45}
+
+  input[type=text],input[type=number]{width:100%;padding:9px 12px;border-radius:10px;
+    border:1px solid var(--line2);background:#0b1119;color:var(--fg);
+    font:13px Consolas,"Microsoft YaHei UI",monospace;transition:.15s}
+  input::placeholder{color:#4d5a6c}
+  input[type=text]:focus,input[type=number]:focus{outline:none;border-color:var(--blue);
+    box-shadow:0 0 0 3px rgba(79,140,255,.15)}
+  select{padding:9px 12px;border-radius:10px;border:1px solid var(--line2);background:#0b1119;
+    color:var(--fg);font-size:13px;width:100%}
+  select:focus{outline:none;border-color:var(--blue)}
+
+  button{padding:9px 13px;border-radius:10px;border:1px solid var(--line2);background:#1a2432;
+    color:var(--fg);font-size:13px;font-family:inherit;cursor:pointer;transition:.15s;
+    white-space:nowrap}
+  button:hover{background:#212d3e;border-color:#34435a}
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  button em{display:block;font-style:normal;font-size:11.5px;color:var(--dim2);margin-top:2px}
+  button.act{display:block;width:100%;text-align:left;font-weight:600;font-size:13.5px;
+    padding:10px 13px}
+  button.p1{background:linear-gradient(135deg,#4f8cff,#3d6fe8);border-color:transparent;color:#fff}
+  button.p1 em{color:rgba(255,255,255,.78)}
+  button.p1:hover{background:linear-gradient(135deg,#5f98ff,#4a7cf5);border-color:transparent}
+  button.p2{background:linear-gradient(135deg,#ff5c72,#e8455d);border-color:transparent;color:#fff}
+  button.p2 em{color:rgba(255,255,255,.82)}
+  button.p2:hover{background:linear-gradient(135deg,#ff6f83,#f2556b);border-color:transparent}
+  .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .line>*{flex:1 1 90px;min-width:0}
+  .line>input[type=text]{flex:1 1 160px;min-width:140px}
+  .line>.fix{flex:0 0 78px}
+  .line>.fix2{flex:0 0 92px}
+  .line>.auto{flex:0 0 auto}
+
+  /* 开关条：标题 + 状态胶囊一行，说明在下面 */
+  button.tog{display:flex;flex-direction:column;align-items:stretch;gap:4px;width:100%;
+    padding:10px 12px;font-size:13.5px;font-weight:600;text-align:left;line-height:1.35}
+  button.tog .mt{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    font-size:13.5px;font-weight:700}
+  button.tog .tx{display:flex;flex-direction:column;gap:2px;min-width:0}
+  button.tog .tx small{font-weight:400;font-size:12px;color:var(--dim2);white-space:normal}
+  button.tog .sw{flex:0 0 auto;font-size:12px;font-weight:600;padding:2px 9px;border-radius:7px;
+    background:#243040;color:var(--dim)}
+  button.tog .sw::before{content:"☐ "}
+  button.tog.on{background:linear-gradient(135deg,rgba(18,196,139,.16),rgba(18,196,139,.04));
+    border-color:rgba(18,196,139,.45)}
+  button.tog.on .tx small{color:#7fd8ba}
+  button.tog.on .sw{background:rgba(18,196,139,.16);border-color:rgba(18,196,139,.5);color:#7fe3bd}
+  button.tog.on .sw::before{content:"☑ "}
+
+  /* 分段控件 */
+  .seg{display:flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:#0b1119}
+  .seg button{flex:1;border:none;border-radius:0;background:transparent;color:var(--dim);
+    padding:8px 6px;font-size:12.5px}
+  .seg button+button{border-left:1px solid var(--line2)}
+  .seg button:hover{background:#151f2d;box-shadow:none}
+  .seg button.on{background:var(--blue);color:#fff;font-weight:600}
+
+  label.cb{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--dim);cursor:pointer}
+  label.cb input{width:15px;height:15px;accent-color:var(--blue)}
+  .field{font-size:12.5px;color:var(--dim);white-space:nowrap;align-self:center}
+  input[type=number]{text-align:center}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;align-items:center;min-height:22px}
+  .chip{padding:3px 10px;border-radius:8px;font:12.5px Consolas,monospace;
+    background:rgba(79,140,255,.14);border:1px solid rgba(79,140,255,.35);color:#9dc0ff}
+  .chip.z{background:rgba(255,176,32,.14);border-color:rgba(255,176,32,.4);color:#ffcf86}
+  .note{font-size:12.5px;color:var(--dim);line-height:1.5}
+  .note b{color:#7fd8ba;font-weight:600}
+  .hr{height:1px;background:linear-gradient(90deg,var(--line2),rgba(38,50,63,0));flex:0 0 auto}
+
+  /* 键值表 */
+  .kv{display:flex;flex-direction:column}
+  .kv.fill{flex:1 1 auto;justify-content:space-between}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:6px 0;border-bottom:1px dashed rgba(38,50,63,.75);font-size:13px}
+  .row:last-child{border-bottom:none}
+  .row span{color:var(--dim)}
+  .row b{font-family:Consolas,monospace;font-weight:600;text-align:right;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sect{font-size:12.5px;font-weight:700;color:var(--blue);letter-spacing:.3px;flex:0 0 auto}
+  /* 横排的状态/耗时小格 */
+  .hrow{display:flex;flex-wrap:wrap;gap:9px}
+  .stat{flex:1 1 132px;min-width:0;display:flex;align-items:center;justify-content:space-between;
+    gap:10px;background:#0b1119;border:1px solid var(--line);border-radius:10px;
+    padding:8px 11px;font-size:12.5px}
+  .stat span{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stat b{font-family:Consolas,monospace;font-weight:600;white-space:nowrap}
+  /* 耗时小格：标签在上、数值在下，窄格子也不会被截 */
+  .stat.c{flex-direction:column;align-items:flex-start;gap:1px;padding:7px 11px}
+  .stat.c span{max-width:100%}
+
+  /* 运行日志独占右列整个高度 */
+  .cols>.logbox{grid-column:2;min-height:0}
+
+  /* ── 运行日志（第三列下半块）── */
+  .logbox{overflow:hidden}
+  #log{flex:1 1 auto;min-height:80px;overflow-y:auto;padding:10px 13px;background:#070b11;
+    border:1px solid var(--line);border-radius:10px;font:12.5px/1.8 Consolas,monospace}
+  #log div{white-space:pre-wrap;word-break:break-all;color:#a9b6c8}
+  #log .t{color:#59667a;margin-right:9px}
+  #log .g{color:var(--green)} #log .y{color:var(--red)} #log .b{color:#7aa7ff}
+  body.resizing{user-select:none}
+
+  /* ── 窄窗口：整体变一列往下排 ── */
+  @media (max-width: 1240px){
+    .cols{display:flex;flex-direction:column;overflow-y:auto}
+    .main{flex:0 0 auto;display:flex;flex-direction:column;gap:var(--gap);overflow:visible}
+    .main>.box{flex:0 0 auto}
+    .cols>.logbox{flex:0 0 auto;min-height:0}
+    #log{height:300px;flex:0 0 auto;resize:vertical}
+  }
+  @media (max-width: 760px){
+    .cols{padding:12px 14px 16px}
+    header{padding:9px 14px 0}
+    .brand{font-size:15px;letter-spacing:3px}
+    .hstat{gap:5px 14px;font-size:12.5px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><em>✦</em> 为你闪耀抢送控制台 <em>✦</em></div>
+  <div class="hstat">
+    <span class="hi"><i class="led" id="led"></i><b id="mon">连接中…</b></span>
+    <span class="sep"></span>
+    <span class="hi">时钟偏差 <b id="h-clock">-</b></span>
+    <span class="sep"></span>
+    <span class="hi big"><span id="cd-why" style="color:var(--dim2)">距离下次出手</span>
+      <b class="cd" id="cd">-</b></span>
+  </div>
+</header>
+
+<div class="cols" id="cols">
+
+  <div class="main">
+
+    <div class="box">
+      <div class="cap">主播状态</div>
+      <div class="kv">
+        <div class="row"><span>当前直播间</span><b id="h-room">-</b></div>
+        <div class="row"><span>主播状态</span><b id="h-live">-</b></div>
+        <div class="row"><span>是否已提前架好</span><b id="h-armed">-</b></div>
+        <div class="row"><span>点亮按钮</span><b id="h-btn">-</b></div>
+        <div class="row"><span>今日判定</span><b id="h-state">-</b></div>
+        <div class="row"><span>今日已注入</span><b id="h-lit">-</b></div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="cap">目标直播间</div>
+      <div class="sub">要抢的那个直播间，填网址就行</div>
+      <input type="text" id="room_url" placeholder="https://live.douyin.com/123456789">
+      <div class="line">
+        <button id="btn-detect">读取当前打开的直播间</button>
+        <button id="btn-save" class="fix">保存</button>
+      </div>
+      <div class="hr"></div>
+      <div class="line">
+        <span class="field auto">常用直播间 <em id="room-count" style="font-style:normal;color:var(--dim2)"></em></span>
+        <select id="rooms" title="用过的直播间地址" style="flex:1.4"></select>
+        <input type="text" id="room_note" placeholder="备注" style="flex:1">
+        <button id="btn-save-room" class="fix">存入</button>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="cap">手动操作</div>
+      <div class="note"><b>没开播时怎么盯：</b>守在直播间页面上，没开播就按下面的节奏刷新；一开播立刻停。</div>
+      <div class="seg" id="seg-refresh">
+        <button data-v="hard">强制刷新 Ctrl+F5</button>
+        <button data-v="soft">普通刷新 F5</button>
+      </div>
+      <div class="line">
+        <span class="field auto">刷新间隔</span>
+        <input type="number" id="refresh_interval" min="0.5" max="60" step="0.5"
+               style="flex:0 0 74px">
+        <span class="field auto">秒</span>
+        <label class="cb" style="justify-content:flex-end">
+          <input type="checkbox" id="refresh_wait_load"> 等页面加载完再计时</label>
+      </div>
+      <div class="note">主播一开播就秒抢，页面一变“直播中”，立刻进去送出。</div>
+      <div class="hr"></div>
+      <button class="act p1" id="btn-prepare">打开直播间并准备好<em>开面板 + 进陪伴之旅，架好枪</em></button>
+      <button class="act p2" id="btn-send">立即送出为你闪耀<em>真花钱 · 9 钻 · 不可撤销</em></button>
+      <button class="act" id="btn-refresh">刷新今天的点亮状态<em>只看一眼 · 不花钱</em></button>
+    </div>
+
+    <div class="box">
+      <div class="cap">送出模式</div>
+      <button class="tog" id="btn-livegrab">
+        <span class="mt">秒送模式<span class="sw" id="sw-livegrab">-</span></span>
+        <span class="tx"><small>主播一开播，立刻点进去送出</small></span>
+      </button>
+      <button class="tog" id="btn-midnight">
+        <span class="mt">定时模式<span class="sw" id="sw-midnight">-</span></span>
+        <span class="tx"><small>每天 0 点抢第一个：23:59 重新进陪伴之旅，0 点整出手</small></span>
+      </button>
+      <div class="line">
+        <span class="field auto">指定时间</span>
+        <input type="text" id="send_times_raw" placeholder="14:00 / 14:00:00，多个用逗号隔开">
+        <button id="btn-save2" class="fix">保存</button>
+        <button id="btn-cal" class="fix2">立即对时</button>
+        <button id="btn-test" class="fix2">试一次</button>
+      </div>
+      <div class="chips" id="chips"></div>
+      <button class="tog" id="btn-dryrun">
+        <span class="mt">演练模式<span class="sw" id="sw-dryrun">-</span></span>
+        <span class="tx"><small>只走流程不真送，不花钻</small></span>
+      </button>
+    </div>
+
+    <!-- 横排：跨 1、2 两列，放在它们下面 -->
+    <div class="box wide">
+      <div class="cap">运行状态</div>
+      <div class="hrow">
+        <div class="stat"><span>监听心跳</span><b id="s-beat">-</b></div>
+        <div class="stat"><span>监听频率</span><b>80 ms</b></div>
+        <div class="stat"><span>首发监听</span><b id="s-gift">-</b></div>
+        <div class="stat"><span>已查询</span><b id="s-ticks">-</b></div>
+      </div>
+      <div class="hr"></div>
+      <div class="sect">每一步花了多少毫秒</div>
+      <div class="hrow" id="timings"></div>
+    </div>
+
+  </div>
+
+  <div class="box logbox">
+    <div class="cap">运行日志<em>全部</em></div>
+    <div id="log"></div>
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ORDER = ["打开并准备","开面板","进陪伴之旅","刷新今日状态","点击送出","确认弹窗","校验结果"];
+let cfg = {};
+const post = async (p,b) => (await fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)})).json();
+
+async function loadCfg(){
+  cfg = await (await fetch("/api/config")).json();
+  $("room_url").value = cfg.room_url || "";
+  $("send_times_raw").value = cfg.send_times_raw || "";
+  paintRefresh();
+  $("refresh_interval").value = cfg.refresh_interval ?? 1;
+  $("refresh_wait_load").checked = !!cfg.refresh_wait_load;
+  paintRooms();
+  paint(); chips(cfg.send_times_raw);
+}
+function paintRooms(){
+  const sel = $("rooms"); sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "— 从历史地址里选 —";
+  sel.appendChild(blank);
+  (cfg.rooms||[]).forEach(r=>{
+    const o = document.createElement("option");
+    o.value = r.url;
+    o.textContent = (r.note ? r.note + " · " : "") + r.url.replace(/^https?:\/\/live\.douyin\.com\//, "");
+    sel.appendChild(o);
+  });
+  sel.value = "";
+  const rc = $("room-count");
+  if(rc) rc.textContent = ((cfg.rooms||[]).length) + " 个";
+}
+$("rooms").onchange = async () => {
+  const v = $("rooms").value;
+  if (!v) return;
+  $("room_url").value = v;
+  cfg.room_url = v;
+  await post("/api/config", {room_url: v});
+};
+function paintRefresh(){
+  const mode = cfg.refresh_mode || "hard";
+  [...$("seg-refresh").children].forEach(b=>{
+    b.className = b.dataset.v === mode ? "on" : "";
+  });
+}
+$("seg-refresh").onclick = async (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  cfg.refresh_mode = btn.dataset.v;
+  paintRefresh();
+  await post("/api/action", {action:"set_refresh_mode", mode:cfg.refresh_mode});
+};
+$("refresh_interval").onchange = async () => {
+  const v = Math.max(0.5, Math.min(60, Number($("refresh_interval").value) || 1));
+  $("refresh_interval").value = v; cfg.refresh_interval = v;
+  await post("/api/config", {refresh_interval: v});
+};
+$("refresh_wait_load").onchange = async () => {
+  const v = $("refresh_wait_load").checked; cfg.refresh_wait_load = v;
+  await post("/api/config", {refresh_wait_load: v});
+};
+$("btn-save-room").onclick = async () => {
+  cfg.room_url = $("room_url").value.trim();
+  const note = $("room_note").value.trim();
+  if (!cfg.room_url) return alert("先填直播间地址");
+  await post("/api/config", {room_url: cfg.room_url});
+  const r = await post("/api/action", {action:"save_room", note});
+  if (r.ok){ cfg = await (await fetch("/api/config")).json(); paintRooms(); $("room_note").value=""; }
+  alert(r.ok ? r.note : (r.note || "保存失败"));
+};
+function paint(){
+  const s=(b,w,on)=>{$(b).className="tog"+(on?" on":"");$(w).textContent=on?"已开启":"已关闭";};
+  s("btn-livegrab","sw-livegrab",!!cfg.trigger_live_start);
+  s("btn-midnight","sw-midnight",!!cfg.trigger_midnight);
+  s("btn-dryrun","sw-dryrun",!!cfg.dry_run);
+}
+async function tog(f,a){
+  if(a){const r=await post("/api/action",{action:a}); if(r.ok)cfg[f]=!cfg[f];}
+  else{cfg[f]=!cfg[f]; await post("/api/config",{[f]:cfg[f]});}
+  paint();
+}
+$("btn-livegrab").onclick=()=>tog("trigger_live_start","toggle_live_grab");
+$("btn-midnight").onclick=()=>tog("trigger_midnight");
+$("btn-dryrun").onclick=()=>tog("dry_run");
+
+async function save(){
+  cfg.room_url=$("room_url").value.trim();
+  cfg.send_times_raw=$("send_times_raw").value.trim();
+  await post("/api/config",{room_url:cfg.room_url,send_times_raw:cfg.send_times_raw});
+  chips(cfg.send_times_raw);
+  for(const id of ["btn-save","btn-save2"]){const b=$(id),o=b.textContent;
+    b.textContent="已保存";setTimeout(()=>b.textContent=o,1000);}
+}
+$("btn-save").onclick=save; $("btn-save2").onclick=save;
+$("send_times_raw").oninput=e=>chips(e.target.value);
+
+async function act(id,a){
+  const el=$(id),o=el.innerHTML; el.disabled=true;
+  try{const r=await post("/api/action",{action:a});
+    el.innerHTML=r.ok?("✅ "+(r.note||"完成")):("❌ "+(r.note||"失败"));}
+  catch(e){el.innerHTML="❌ 出错";}
+  setTimeout(()=>{el.innerHTML=o;el.disabled=false;},2500);
+}
+$("btn-detect").onclick=async()=>{
+  const b=$("btn-detect"); b.disabled=true; b.textContent="识别中…";
+  const r=await post("/api/action",{action:"detect_room"});
+  b.disabled=false; b.textContent="读取当前打开的直播间";
+  if(r.ok){$("room_url").value=r.note;save();}else alert(r.note||"没识别到");
+};
+$("btn-prepare").onclick=()=>act("btn-prepare","prepare");
+$("btn-refresh").onclick=()=>act("btn-refresh","refresh_accompany");
+$("btn-cal").onclick=()=>act("btn-cal","calibrate");
+$("btn-test").onclick=()=>act("btn-test","dry_run_test");
+$("btn-send").onclick=()=>{
+  if(!confirm("确认现在送出「为你闪耀」？\n\n真的花 9 钻，不可撤销。"))return;
+  act("btn-send","send_now");
+};
+
+function chips(raw){
+  const box=$("chips"); box.innerHTML="";
+  (raw||"").split(/[,，、;；]/).map(s=>s.trim()).filter(Boolean).forEach(p=>{
+    const d=document.createElement("span");
+    d.className="chip"+(/^0?0:0?0(:0?0)?$/.test(p)?" z":"");
+    d.textContent=p; box.appendChild(d);
+  });
+}
+function times(t){
+  const box=$("timings");
+  const ks=ORDER.filter(k=>t&&t[k]!==undefined);
+  box.innerHTML=ks.length
+    ? ks.map(k=>`<div class="stat c"><span>${k}</span><b>${t[k]} ms</b></div>`).join("")
+    : '<div class="stat c"><span>还没有记录</span><b>-</b></div>';
+}
+async function tick(){
+  try{
+    const s=await (await fetch("/api/status")).json();
+    const beat=s.heartbeat_age, alive=!!s.monitor&&beat!=null&&beat<15;
+    $("led").className="led"+(alive?" on":"");
+    $("mon").textContent=alive?`监听中 · ${beat.toFixed(1)}s 前心跳`:"监听启动中…";
+    $("h-room").textContent=s.room||"-";
+    $("h-room").title=s.room||"";
+    $("h-clock").textContent=s.offset_ms==null?"-":((s.offset_ms>0?"+":"")+s.offset_ms.toFixed(0)+"ms");
+    /* “0 点首发 还有 00:01:23.456” → 小字写原因，大字只留倒计时 */
+    const nt=(s.next_trigger||"-"), mm=nt.match(/^(.*?)\s*还有\s*(.+)$/);
+    $("cd-why").textContent=mm?mm[1]:"距离下次出手";
+    $("cd").textContent=mm?mm[2]:nt;
+    $("cd").title=nt;
+
+    const live=s.live===true;
+    $("h-live").textContent=live?"正在开播":(s.live===false?"未开播 · 守候中":"未知");
+    $("h-live").className=live?"green":"amber";
+    $("h-armed").textContent=s.armed?"已架好 · 可秒送":"未架好";
+    $("h-armed").className=s.armed?"green":"amber";
+    const p=s.panel||"";
+    $("h-btn").textContent=p.indexOf("可点")===0?"可以点亮":(p.indexOf("不可点")===0?"已点亮":"未就绪");
+    $("h-btn").className=p.indexOf("可点")===0?"green":(p.indexOf("不可点")===0?"blue":"amber");
+    $("h-state").textContent=s.already_done?"今天已送过（不是失败）":(p.indexOf("可点")===0?"可以出手":"等待中");
+    $("h-state").className=p.indexOf("可点")===0?"green":"blue";
+    $("h-lit").textContent=(s.lit_value==null||s.lit_value==="-")?"-":s.lit_value;
+
+    $("s-beat").textContent=beat==null?"-":(beat.toFixed(1)+" 秒前");
+    $("s-gift").textContent=s.first_gift||"还没有人送出";
+    $("s-ticks").textContent=(s.monitor_ticks||0)+" 次";
+    if(s.live_grab!==undefined&&s.live_grab!==cfg.trigger_live_start){cfg.trigger_live_start=s.live_grab;paint();}
+    times(s.timings||{});
+
+    $("log").innerHTML=(s.logs||[]).map(l=>{
+      let c="";
+      if(l.msg.indexOf("★")>=0||l.msg.indexOf("✅")>=0)c="g";
+      else if(l.msg.indexOf("⚠")>=0||l.msg.indexOf("失败")>=0||l.msg.indexOf("异常")>=0)c="y";
+      else if(l.msg.indexOf("ℹ")>=0||l.msg.indexOf("JS")>=0||l.msg.indexOf("监听")>=0||l.msg.indexOf("秒抢")>=0)c="b";
+      return `<div class="${c}"><span class="t">${l.ts}</span>${l.msg.replace(/</g,"&lt;")}</div>`;
+    }).join("");
+    $("log").scrollTop=$("log").scrollHeight;
+  }catch(e){}
+}
+loadCfg().then(tick).catch(tick);
+setInterval(tick,600);
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+# ── 绝对不能提交：浏览器配置目录里是你抖音的登录态 ──
+chrome-profile/
+
+# ── 个人配置与标定数据（每台机器不一样）──
+config.json
+data/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ── 编辑器 / 系统 ──
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ── 运行产物 / 截图（截图里可能带昵称、头像、房间号，确认后再决定要不要提交）──
+*.log
+*.zip
+_shot/
+点这里.png
+面板局部.png
+面板全屏.png
+陪伴之旅.png
