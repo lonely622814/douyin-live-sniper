@@ -601,6 +601,8 @@ class Controller:
             # 这里的等待决定了"最坏情况多久才能发现开播"：原来是无条件 2 秒，
             # 加上刷新本身和后面的收拾动作，一轮能拖到 5~10 秒。改成几乎不睡。
             time.sleep(0.05)
+        # 线程退出也要留痕：日志突然断在这里，就说明是程序停了而不是页面没更新
+        self.diag(f"守候线程退出（共刷新 {self.watch_cycles} 轮）")
 
     @staticmethod
     def _sig(info: dict) -> str:
