@@ -1,5 +1,7 @@
 {
   "room_url": "",
+  "watch_enabled": true,
+  "refresh_enabled": true,
   "trigger_midnight": true,
   "trigger_live_start": true,
   "send_times_raw": "",

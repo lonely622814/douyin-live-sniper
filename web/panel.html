@@ -52,7 +52,7 @@
   /* ── 卡片 ── */
   /* 普通块按内容保底（比例分不够就撑住，绝不裁）；日志块可以压到 190px，其余给日志 */
   .box{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
-    padding:10px 14px 11px;display:flex;flex-direction:column;gap:8px;min-width:0;
+    padding:10px 14px 11px;display:flex;flex-direction:column;gap:7px;min-width:0;
     min-height:0;overflow:hidden}
   .logbox{min-height:190px}
   .box.spread{justify-content:space-between}
@@ -96,21 +96,24 @@
   .line>.fix2{flex:0 0 92px}
   .line>.auto{flex:0 0 auto}
 
-  /* 开关条：标题 + 状态胶囊一行，说明在下面 */
-  button.tog{display:flex;flex-direction:column;align-items:stretch;gap:4px;width:100%;
-    padding:10px 12px;font-size:13.5px;font-weight:600;text-align:left;line-height:1.35}
-  button.tog .mt{display:flex;align-items:center;justify-content:space-between;gap:10px;
-    font-size:13.5px;font-weight:700}
-  button.tog .tx{display:flex;flex-direction:column;gap:2px;min-width:0}
+  /* 开关卡片：圆角长条，右上角一个 IO 拨动开关（不是文字胶囊） */
+  button.tog{position:relative;display:block;width:100%;text-align:left;
+    padding:10px 64px 10px 14px;border-radius:16px;font-size:13.5px;font-weight:600;
+    line-height:1.35}
+  button.tog .tx{display:flex;flex-direction:column;gap:3px;min-width:0}
   button.tog .tx small{font-weight:400;font-size:12px;color:var(--dim2);white-space:normal}
-  button.tog .sw{flex:0 0 auto;font-size:12px;font-weight:600;padding:2px 9px;border-radius:7px;
-    background:#243040;color:var(--dim)}
-  button.tog .sw::before{content:"☐ "}
-  button.tog.on{background:linear-gradient(135deg,rgba(18,196,139,.16),rgba(18,196,139,.04));
-    border-color:rgba(18,196,139,.45)}
+  button.tog .sw{position:absolute;top:10px;right:14px;width:42px;height:23px;border-radius:12px;
+    background:#2b3747;border:1px solid #33414f;transition:background .18s,border-color .18s}
+  button.tog .sw::after{content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;
+    border-radius:50%;background:#93a0b3;transition:left .18s,background .18s}
+  button.tog:hover .sw{border-color:#415266}
+  button.tog.on{background:linear-gradient(135deg,rgba(18,196,139,.14),rgba(18,196,139,.03));
+    border-color:rgba(18,196,139,.42)}
   button.tog.on .tx small{color:#7fd8ba}
-  button.tog.on .sw{background:rgba(18,196,139,.16);border-color:rgba(18,196,139,.5);color:#7fe3bd}
-  button.tog.on .sw::before{content:"☑ "}
+  button.tog.on .sw{background:var(--green);border-color:var(--green)}
+  button.tog.on .sw::after{left:22px;background:#fff}
+  /* 两个开关并排 */
+  .swrow{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 
   /* 分段控件 */
   .seg{display:flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:#0b1119}
@@ -136,7 +139,7 @@
   .kv{display:flex;flex-direction:column}
   .kv.fill{flex:1 1 auto;justify-content:space-between}
   .row{display:flex;align-items:center;justify-content:space-between;gap:12px;
-    padding:6px 0;border-bottom:1px dashed rgba(38,50,63,.75);font-size:13px}
+    padding:5px 0;border-bottom:1px dashed rgba(38,50,63,.75);font-size:13px}
   .row:last-child{border-bottom:none}
   .row span{color:var(--dim)}
   .row b{font-family:Consolas,monospace;font-weight:600;text-align:right;
@@ -231,7 +234,16 @@
 
     <div class="box">
       <div class="cap">手动操作</div>
-      <div class="note"><b>没开播时怎么盯：</b>守在直播间页面上，没开播就按下面的节奏刷新；一开播立刻停。</div>
+      <div class="swrow">
+        <button class="tog" id="btn-watch">
+          <span class="tx">开播监听<small>关掉就不守候、不判定</small></span>
+          <span class="sw" id="sw-watch"></span>
+        </button>
+        <button class="tog" id="btn-autorefresh">
+          <span class="tx">页面刷新兜底<small>关掉只靠页面自己上报</small></span>
+          <span class="sw" id="sw-autorefresh"></span>
+        </button>
+      </div>
       <div class="seg" id="seg-refresh">
         <button data-v="hard">强制刷新 Ctrl+F5</button>
         <button data-v="soft">普通刷新 F5</button>
@@ -244,7 +256,6 @@
         <label class="cb" style="justify-content:flex-end">
           <input type="checkbox" id="refresh_wait_load"> 等页面加载完再计时</label>
       </div>
-      <div class="note">主播一开播就秒抢，页面一变“直播中”，立刻进去送出。</div>
       <div class="hr"></div>
       <button class="act p1" id="btn-prepare">打开直播间并准备好<em>开面板 + 进陪伴之旅，架好枪</em></button>
       <button class="act p2" id="btn-send">立即送出为你闪耀<em>真花钱 · 9 钻 · 不可撤销</em></button>
@@ -254,12 +265,12 @@
     <div class="box">
       <div class="cap">送出模式</div>
       <button class="tog" id="btn-livegrab">
-        <span class="mt">秒送模式<span class="sw" id="sw-livegrab">-</span></span>
-        <span class="tx"><small>主播一开播，立刻点进去送出</small></span>
+        <span class="tx">秒送模式<small>主播一开播，立刻点进去送出</small></span>
+        <span class="sw" id="sw-livegrab"></span>
       </button>
       <button class="tog" id="btn-midnight">
-        <span class="mt">定时模式<span class="sw" id="sw-midnight">-</span></span>
-        <span class="tx"><small>每天 0 点抢第一个：23:59 重新进陪伴之旅，0 点整出手</small></span>
+        <span class="tx">定时模式<small>每天 0 点抢第一个：23:59 重进陪伴之旅，0 点整出手</small></span>
+        <span class="sw" id="sw-midnight"></span>
       </button>
       <div class="line">
         <span class="field auto">指定时间</span>
@@ -270,8 +281,8 @@
       </div>
       <div class="chips" id="chips"></div>
       <button class="tog" id="btn-dryrun">
-        <span class="mt">演练模式<span class="sw" id="sw-dryrun">-</span></span>
-        <span class="tx"><small>只走流程不真送，不花钻</small></span>
+        <span class="tx">演练模式<small>只走流程不真送，不花钻</small></span>
+        <span class="sw" id="sw-dryrun"></span>
       </button>
     </div>
 
@@ -370,10 +381,13 @@ $("btn-save-room").onclick = async () => {
   alert(r.ok ? r.note : (r.note || "保存失败"));
 };
 function paint(){
-  const s=(b,w,on)=>{$(b).className="tog"+(on?" on":"");$(w).textContent=on?"已开启":"已关闭";};
-  s("btn-livegrab","sw-livegrab",!!cfg.trigger_live_start);
-  s("btn-midnight","sw-midnight",!!cfg.trigger_midnight);
-  s("btn-dryrun","sw-dryrun",!!cfg.dry_run);
+  /* 开关就是右上角那个拨动开关：靠 class 表现，不再写"已开启"文字 */
+  const s=(b,on)=>{$(b).className="tog"+(on?" on":"");};
+  s("btn-livegrab",!!cfg.trigger_live_start);
+  s("btn-midnight",!!cfg.trigger_midnight);
+  s("btn-dryrun",!!cfg.dry_run);
+  s("btn-watch",cfg.watch_enabled!==false);
+  s("btn-autorefresh",cfg.refresh_enabled!==false);
 }
 async function tog(f,a){
   if(a){const r=await post("/api/action",{action:a}); if(r.ok)cfg[f]=!cfg[f];}
@@ -383,6 +397,8 @@ async function tog(f,a){
 $("btn-livegrab").onclick=()=>tog("trigger_live_start","toggle_live_grab");
 $("btn-midnight").onclick=()=>tog("trigger_midnight");
 $("btn-dryrun").onclick=()=>tog("dry_run");
+$("btn-watch").onclick=()=>tog("watch_enabled");
+$("btn-autorefresh").onclick=()=>tog("refresh_enabled");
 
 async function save(){
   cfg.room_url=$("room_url").value.trim();
@@ -437,8 +453,10 @@ async function tick(){
   try{
     const s=await (await fetch("/api/status")).json();
     const beat=s.heartbeat_age, alive=!!s.monitor&&beat!=null&&beat<15;
-    $("led").className="led"+(alive?" on":"");
-    $("mon").textContent=alive?`监听中 · ${beat.toFixed(1)}s 前心跳`:"监听启动中…";
+    const watching = s.watch_enabled!==false;
+    $("led").className="led"+(alive&&watching?" on":"");
+    $("mon").textContent = !watching ? "监听已关闭"
+      : (alive?`监听中 · ${beat.toFixed(1)}s 前心跳`:"监听启动中…");
     $("h-room").textContent=s.room||"-";
     $("h-room").title=s.room||"";
     $("h-clock").textContent=s.offset_ms==null?"-":((s.offset_ms>0?"+":"")+s.offset_ms.toFixed(0)+"ms");
@@ -481,6 +499,8 @@ async function tick(){
       $("s-reload").title=`第 ${s.watch_cycles||0} 轮 · 最近刷新 ${s.last_reload_time||"-"}`;
     }
     if(s.live_grab!==undefined&&s.live_grab!==cfg.trigger_live_start){cfg.trigger_live_start=s.live_grab;paint();}
+    if(s.watch_enabled!==undefined&&s.watch_enabled!==cfg.watch_enabled){cfg.watch_enabled=s.watch_enabled;paint();}
+    if(s.refresh_enabled!==undefined&&s.refresh_enabled!==cfg.refresh_enabled){cfg.refresh_enabled=s.refresh_enabled;paint();}
     times(s.timings||{});
 
     $("log").innerHTML=(s.logs||[]).map(l=>{

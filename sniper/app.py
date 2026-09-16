@@ -73,6 +73,7 @@ class Controller:
         self.page_challenge = False           # 抖音是否把页面换成了验证码中间页
         self.page_title = "-"
         self.page_heap_mb: float | None = None
+        self.watch_on = bool(cfg.watch_enabled)
         self.diag(
             f"===== 启动 ===== 房间={cfg.room_url or '(未设置)'} "
             f"刷新间隔={cfg.refresh_interval:g}s 刷新方式={'强制' if cfg.refresh_mode == 'hard' else '普通'} "
@@ -162,6 +163,8 @@ class Controller:
             "monitor_ticks": self.monitor_ticks,
             "live": self.room_live_state,
             "watching": True,
+            "watch_enabled": bool(self.cfg.watch_enabled),
+            "refresh_enabled": bool(self.cfg.refresh_enabled),
             "live_grab": bool(self.cfg.trigger_live_start),
             "midnight": bool(self.cfg.trigger_midnight),
             "dry_run": bool(self.cfg.dry_run),
@@ -510,6 +513,18 @@ class Controller:
                 # 所以真正的周期有个下限。
                 interval = max(self.MIN_REFRESH_CYCLE,
                                float(self.cfg.refresh_interval or 1.0))
+                # 监听总开关关掉：不判定、不刷新，也不去动浏览器
+                if not self.cfg.watch_enabled:
+                    if self.watch_on:
+                        self.watch_on = False
+                        self.log("开播监听：已关闭（不守候、不刷新）")
+                        self.diag("监听关闭")
+                    time.sleep(0.5)
+                    continue
+                if not self.watch_on:
+                    self.watch_on = True
+                    self.log("开播监听：已开启，继续守候")
+                    self.diag("监听开启")
                 # 已经开播：停止刷新，只留低频的收拾工作（装监听、保持架枪）
                 if self.room_live_state is True:
                     if time.monotonic() - last_house > 1.0:
@@ -525,6 +540,11 @@ class Controller:
                         f"守候中：已等 {waited:.0f} 分钟（每 {interval:g} 秒刷新一次页面兜底，"
                         f"刷新后立刻高频判定）"
                     )
+                    self.diag(
+                        f"守候中 已等{waited:.0f}分钟 刷新={'开' if self.cfg.refresh_enabled else '关'} "
+                        f"页面{self._sig(self.flow.room_live())} 心跳={self._heartbeat_text()} "
+                        f"页面标题={self.page_title}"
+                    )
 
                 # ① 页面自己更新时，这里就能抓到（另一条路是页面里那个 80ms 的 JS 监听）
                 quick = self.flow.room_live()
@@ -535,6 +555,10 @@ class Controller:
                     continue
 
                 # ② 没到刷新点：短睡继续查。这一小圈不做任何别的 CDP 动作，别浪费时间
+                #    页面刷新兜底关掉时，只做页面自查（便宜、不触发风控），永不刷新
+                if not self.cfg.refresh_enabled:
+                    time.sleep(0.1)
+                    continue
                 #    注意：一旦被风控换成验证码页，就把节奏放慢，别继续猛刷加重风控
                 gap = interval * (4.0 if self.page_challenge else 1.0)
                 if time.monotonic() - last_reload < gap:
