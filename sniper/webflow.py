@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import collections
 import re
 import time
 from dataclasses import dataclass, field
@@ -40,6 +41,9 @@ MONITOR_JS = r"""
     return {already: true, live: window.__sniperMon.live};
   }
   // 旧版本（比如用 fetch 上报的）要换掉，否则它会一直跑还一直失败
+  if (window.__sniperMon && window.__sniperMon.observer) {
+    try { window.__sniperMon.observer.disconnect(); } catch (e) {}
+  }
   if (window.__sniperMon && window.__sniperMon.timer) {
     clearInterval(window.__sniperMon.timer);
   }
@@ -58,7 +62,13 @@ MONITOR_JS = r"""
   }
 
   const seenGifts = {};
+  let seenCount = 0;
+  let lastScan = 0;
   function scanGifts() {
+    // 送礼播报不必每 80ms 扫全页，400ms 一次足够，也省 CPU
+    const nowMs = Date.now();
+    if (nowMs - lastScan < 400) return;
+    lastScan = nowMs;
     for (const el of document.querySelectorAll('span,div')) {
       let own = '';
       for (const n of el.childNodes) if (n.nodeType === 3) own += n.textContent;
@@ -67,6 +77,11 @@ MONITOR_JS = r"""
       if (own.indexOf('为你闪耀') === -1) continue;
       if (seenGifts[own]) continue;
       seenGifts[own] = 1;
+      // 别让去重表无限长大（页面开很久时）
+      if (++seenCount > 500) {
+        for (const key in seenGifts) delete seenGifts[key];
+        seenCount = 0;
+      }
       report('gift', {text: own});
     }
   }
@@ -112,7 +127,7 @@ MONITOR_JS = r"""
   tick();
   report('hello', {url: location.href.slice(0, 90), live: last});
   return {installed: true, live: window.__sniperMon.live};
-})(window.__sniperSend, 6)
+})(window.__sniperSend, 7)
 """
 
 
@@ -139,7 +154,7 @@ class WebFlow:
         self.session: cdp.CDP | None = None
         self._acc_session: cdp.CDP | None = None   # 陪伴之旅 iframe 的会话（复用）
         self._acc_ws: str = ""
-        self.log: list[str] = []
+        self.log: collections.deque = collections.deque(maxlen=300)  # 别无限长
 
     # ---------- 基础设施 ----------
 
@@ -665,6 +680,20 @@ class WebFlow:
                 pass
         self._acc_session = None
         self._acc_ws = ""
+
+    def reset_session(self) -> None:
+        """丢掉当前页面会话（连陪伴之旅那条一起），下次用的时候重新连。
+
+        长跑时页面可能卡死或标签被换掉，这时候旧会话一直报错、程序却还以为在监听；
+        主动断掉重连就能自己恢复。同时也把连接关干净，不留半死的 socket。
+        """
+        try:
+            if self.session is not None:
+                self.session.close()
+        except Exception:
+            pass
+        self.session = None
+        self._drop_accompany()
 
     def page_text(self) -> str:
         session = self._accompany_session()

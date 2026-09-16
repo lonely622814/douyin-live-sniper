@@ -215,14 +215,7 @@ class Controller:
             self.room_live_state = live
             if live:
                 self.log("★ 页面 JS 检测到开播！")
-                if self.already_done_today:
-                    self.log("（今天已经送过了，不再送出）")
-                elif self.cfg.trigger_live_start:
-                    threading.Thread(
-                        target=self.live_grab, daemon=True, name="live-grab"
-                    ).start()
-                else:
-                    self.log("（开播秒抢未开启，只记录不动作）")
+                self.fire_live_grab()
             else:
                 self.log("页面 JS 检测到主播下播")
             return
@@ -506,6 +499,7 @@ class Controller:
         last_report = time.monotonic()
         last_cycle_log = 0.0
         last_reload = time.monotonic()
+        empty_streak = 0                 # 页面连续几次没回应
         while not self._stop.is_set():
             try:
                 # 整页刷新后，抖音要 1~2 秒才渲染出"直播中"。刷得比这更快，
@@ -548,6 +542,16 @@ class Controller:
 
                 # ① 页面自己更新时，这里就能抓到（另一条路是页面里那个 80ms 的 JS 监听）
                 quick = self.flow.room_live()
+                if not quick:
+                    # 页面连着几次不给回应：多半是标签被换掉/页面卡死，主动重连一次
+                    empty_streak += 1
+                    if empty_streak >= 10:
+                        empty_streak = 0
+                        self.log("页面连着几次没回应，重连调试通道")
+                        self.diag("页面无响应，重连 CDP 会话")
+                        self.flow.reset_session()
+                else:
+                    empty_streak = 0
                 self._notice_page_state(quick)
                 if quick.get("live"):
                     self.diag(f"★ 开播判定（页面自查）页面{self._sig(quick)}")
@@ -703,6 +707,14 @@ class Controller:
             return
         self.room_live_state = True
         self.log(f"★ 检测到主播已开播（{how}）！已停止刷新")
+        self.fire_live_grab()
+
+    def fire_live_grab(self) -> None:
+        """开播秒抢的统一入口。
+
+        20 秒内只触发一次（页面状态抖动时会反复报 live，不能每次都起线程）；
+        同时清掉已经结束的线程引用，别让线程对象一直堆着。
+        """
         if self.already_done_today:
             self.log("（今天已经送过了，不再送出）")
             return
@@ -712,7 +724,11 @@ class Controller:
         if time.monotonic() - getattr(self, "_last_grab_at", 0.0) < 20:
             return
         self._last_grab_at = time.monotonic()
-        threading.Thread(target=self.live_grab, daemon=True, name="live-grab").start()
+        alive = [t for t in getattr(self, "_grab_threads", []) if t.is_alive()]
+        thread = threading.Thread(target=self.live_grab, daemon=True, name="live-grab")
+        thread.start()
+        alive.append(thread)
+        self._grab_threads = alive
 
     def housekeeping(self) -> None:
         """让浏览器停在目标直播间、页面里装着监听脚本。低频调用。"""
