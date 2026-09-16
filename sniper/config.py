@@ -17,6 +17,7 @@ class Config:
     # —— 两条触发线 ——
     watch_enabled: bool = True  # 开播监听总开关：关了就不守候、不判定、不刷新
     refresh_enabled: bool = True  # 页面刷新兜底开关：关了只靠页面 JS 自己上报
+    auto_recycle: bool = True  # 自动换标签（内存整理）：页面堆太大时换新标签重建渲染进程
     trigger_midnight: bool = True  # 每天 00:00:00.000 的第一个为你闪耀
     trigger_live_start: bool = False  # 主播一开播就秒抢
     send_times_raw: str = ""  # 自定义发送时间，逗号分隔，如 "14:00:00,20:30"

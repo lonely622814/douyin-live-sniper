@@ -167,6 +167,52 @@ def wait_for_page(port: int = DEFAULT_PORT, url_contains: str = "", timeout: flo
     raise TimeoutError(f"等不到匹配 {url_contains!r} 的页面目标；当前 {last}")
 
 
+def close_tab(target_id: str, port: int = DEFAULT_PORT) -> bool:
+    """关掉一个标签页。
+
+    走 HTTP 的 /json/close 就够了，不用连浏览器级 WebSocket——
+    浏览器级调试端点同一时刻只允许一个客户端，抢它容易把别的连接踢掉。
+    """
+    try:
+        _http_json(port, f"/json/close/{target_id}", timeout=3.0)
+        return True
+    except Exception:
+        return False
+
+
+def wait_for_new_page(port: int = DEFAULT_PORT, exclude_ids: set | None = None,
+                      timeout: float = 12.0) -> bool:
+    """等一个**新出现**的页面真正有内容（document.body 不是空白）。
+
+    必须排除"换标签之前就已经存在"的那些页面，否则会拿旧标签的正文当成新标签就绪。
+    """
+    deadline = time.monotonic() + timeout
+    exclude = set(exclude_ids or ())
+    while time.monotonic() < deadline:
+        for target in list_targets(port):
+            if target.get("type") != "page" or target.get("id") in exclude:
+                continue
+            ws = target.get("webSocketDebuggerUrl")
+            if not ws:
+                continue
+            session = None
+            try:
+                session = CDP(ws, timeout=4)
+                ok = session.evaluate("!!(document.body && document.body.innerText.length > 0)")
+                if ok:
+                    return True
+            except Exception:
+                pass
+            finally:
+                if session is not None:
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+        time.sleep(0.3)
+    return False
+
+
 def attach(target: dict, timeout: float = 10.0) -> CDP:
     session = CDP(target["webSocketDebuggerUrl"], timeout=timeout)
     session.enable_page()

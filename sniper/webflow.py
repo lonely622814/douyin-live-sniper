@@ -695,6 +695,38 @@ class WebFlow:
         self.session = None
         self._drop_accompany()
 
+    def recycle_room_tab(self) -> dict:
+        """换标签：新开一个标签加载直播间，等它能用了再关掉旧标签。
+
+        目的：整页刷新久了页面内存只增不减（V8 的堆不会还给系统），
+        只有把标签整个换掉、让 Chrome 重建渲染进程，内存才会真正回收。
+        顺序很重要——**先开新的、再关旧的**，否则中间会有一段没有页面的空窗。
+        返回 {"ok":…, "waited":…}
+        """
+        url = self.room_url
+        if not url:
+            return {"ok": False, "note": "没有直播间地址"}
+        before = {
+            t.get("id")
+            for t in browser.list_targets(self.port)
+            if t.get("type") == "page"
+        }
+        old = self._pick_target()
+        try:
+            browser.open_tab(url, port=self.port)
+        except Exception as exc:
+            return {"ok": False, "note": f"新标签没开起来：{exc}"}
+        # 等**新出现**的那个标签真的有内容（最多 12 秒），期间旧标签还在正常干活
+        started = time.monotonic()
+        ready = browser.wait_for_new_page(port=self.port, exclude_ids=before, timeout=12.0)
+        waited = time.monotonic() - started
+        if old and old.get("id"):
+            browser.close_tab(old["id"], port=self.port)
+        # 会话绑在旧标签上，必须丢掉重连
+        self.reset_session()
+        self.note(f"已换标签（新标签就绪用了 {waited*1000:.0f} ms）")
+        return {"ok": ready, "waited": waited}
+
     def page_text(self) -> str:
         session = self._accompany_session()
         if not session:

@@ -37,6 +37,9 @@ class Controller:
     # 整页刷新后抖音要 1~2 秒才渲染出状态，刷得比这更快页面会一直处于加载中，
     # 反而什么都判不出来。所以刷新周期有个下限（秒）。
     MIN_REFRESH_CYCLE = 2.0
+    # 内存整理：页面 JS 堆超过这个值、或者刷了这么多轮，就换一个新标签重建渲染进程
+    RECYCLE_HEAP_MB = 280.0
+    RECYCLE_EVERY_CYCLES = 240
 
     GIFT_PATTERNS = (
         re.compile(r"([^\s：:×x]{1,18})[：:]?\s*送出了?\s*为你闪耀"),
@@ -165,6 +168,7 @@ class Controller:
             "watching": True,
             "watch_enabled": bool(self.cfg.watch_enabled),
             "refresh_enabled": bool(self.cfg.refresh_enabled),
+            "auto_recycle": bool(self.cfg.auto_recycle),
             "live_grab": bool(self.cfg.trigger_live_start),
             "midnight": bool(self.cfg.trigger_midnight),
             "dry_run": bool(self.cfg.dry_run),
@@ -630,6 +634,7 @@ class Controller:
                 # 每 5 轮记一次页面内存，方便事后看"刷新久了是不是越来越占内存"
                 if cycle_no % 5 == 0:
                     self._log_page_metrics(cycle_no)
+                    self.maybe_recycle_tab()
                 # 每 2 秒就刷一轮，日志不能每轮都写，不然会淹没运行日志
                 if time.monotonic() - last_cycle_log > 60:
                     last_cycle_log = time.monotonic()
@@ -697,6 +702,47 @@ class Controller:
             f"内存 第{cycle_no}轮 页面JS堆={m.get('heap_mb')}MB "
             f"DOM节点={m.get('nodes')} 文档={m.get('docs')}"
         )
+
+    def _seconds_to_next_trigger(self) -> float | None:
+        """离下一个定时出手还有多少秒（没有定时、或时钟没标定时返回 None）。"""
+        if not self.tb:
+            return None
+        targets = self._targets(self.tb.now_ns())
+        if not targets:
+            return None
+        return (targets[0][0] - self.tb.now_ns()) / 1e9
+
+    def maybe_recycle_tab(self) -> None:
+        """内存整理：条件合适时换掉整个标签页，把渲染进程连同内存一起重建。
+
+        换标签有代价（新标签要加载几秒，而且会丢掉"已架好"状态），所以只在
+        ①开了刷新兜底（否则本来就不会刷、也不会涨）
+        ②没在播、没架枪（此刻没有需要保住的状态）
+        ③离下一个定时出手还有 5 分钟以上（别在要紧关头动手）
+        ④页面内存超过阈值，或者已经刷了 240 轮（约 10~20 分钟）时 才换。
+        """
+        if (not self.cfg.refresh_enabled or not self.cfg.auto_recycle
+                or self.room_live_state or self.armed):
+            return
+        left = self._seconds_to_next_trigger()
+        if left is not None and left < 300:
+            return
+        heap = self.page_heap_mb or 0.0
+        cycles_since = self.watch_cycles - getattr(self, "_last_recycle_cycle", 0)
+        if heap < self.RECYCLE_HEAP_MB and cycles_since < self.RECYCLE_EVERY_CYCLES:
+            return
+        self._last_recycle_cycle = self.watch_cycles
+        self.log(f"内存整理：换一个新标签接管直播间（当前页面堆 {heap:.0f} MB，"
+                 f"已刷 {cycles_since} 轮）")
+        result = self.flow.recycle_room_tab()
+        self.monitor_installed = False          # 新页面里还没有监听脚本
+        if result.get("ok"):
+            self.log(f"内存整理完成，新标签已就绪（{result.get('waited', 0)*1000:.0f} ms）")
+            self.diag(f"换标签成功 换前堆={heap:.0f}MB 已刷{cycles_since}轮 "
+                      f"新标签就绪{result.get('waited', 0)*1000:.0f}ms")
+        else:
+            self.log(f"内存整理失败：{result.get('note') or '未知原因'}")
+            self.diag(f"换标签失败：{result.get('note') or '未知原因'}")
 
     def on_live_detected(self, how: str) -> None:
         """判定到开播：停止刷新（状态一变 True，主循环就不再刷），并按需触发秒抢。

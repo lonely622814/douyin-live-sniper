@@ -52,7 +52,7 @@
   /* ── 卡片 ── */
   /* 普通块按内容保底（比例分不够就撑住，绝不裁）；日志块可以压到 190px，其余给日志 */
   .box{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
-    padding:10px 14px 11px;display:flex;flex-direction:column;gap:7px;min-width:0;
+    padding:10px 14px 11px;display:flex;flex-direction:column;gap:6px;min-width:0;
     min-height:0;overflow:hidden}
   .logbox{min-height:190px}
   .box.spread{justify-content:space-between}
@@ -114,6 +114,8 @@
   button.tog.on .sw::after{left:22px;background:#fff}
   /* 两个开关并排 */
   .swrow{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .swrow.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+  @media (max-width:1360px){ .swrow.three{grid-template-columns:1fr 1fr} }
 
   /* 分段控件 */
   .seg{display:flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:#0b1119}
@@ -234,7 +236,7 @@
 
     <div class="box">
       <div class="cap">手动操作</div>
-      <div class="swrow">
+      <div class="swrow three">
         <button class="tog" id="btn-watch">
           <span class="tx">开播监听<small>关掉就不守候、不判定</small></span>
           <span class="sw" id="sw-watch"></span>
@@ -242,6 +244,10 @@
         <button class="tog" id="btn-autorefresh">
           <span class="tx">页面刷新兜底<small>关掉只靠页面自己上报</small></span>
           <span class="sw" id="sw-autorefresh"></span>
+        </button>
+        <button class="tog" id="btn-recycle">
+          <span class="tx">自动换标签<small>内存涨了就换新标签</small></span>
+          <span class="sw" id="sw-recycle"></span>
         </button>
       </div>
       <div class="seg" id="seg-refresh">
@@ -388,6 +394,7 @@ function paint(){
   s("btn-dryrun",!!cfg.dry_run);
   s("btn-watch",cfg.watch_enabled!==false);
   s("btn-autorefresh",cfg.refresh_enabled!==false);
+  s("btn-recycle",cfg.auto_recycle!==false);
 }
 async function tog(f,a){
   if(a){const r=await post("/api/action",{action:a}); if(r.ok)cfg[f]=!cfg[f];}
@@ -399,6 +406,7 @@ $("btn-midnight").onclick=()=>tog("trigger_midnight");
 $("btn-dryrun").onclick=()=>tog("dry_run");
 $("btn-watch").onclick=()=>tog("watch_enabled");
 $("btn-autorefresh").onclick=()=>tog("refresh_enabled");
+$("btn-recycle").onclick=()=>tog("auto_recycle");
 
 async function save(){
   cfg.room_url=$("room_url").value.trim();
@@ -501,6 +509,7 @@ async function tick(){
     if(s.live_grab!==undefined&&s.live_grab!==cfg.trigger_live_start){cfg.trigger_live_start=s.live_grab;paint();}
     if(s.watch_enabled!==undefined&&s.watch_enabled!==cfg.watch_enabled){cfg.watch_enabled=s.watch_enabled;paint();}
     if(s.refresh_enabled!==undefined&&s.refresh_enabled!==cfg.refresh_enabled){cfg.refresh_enabled=s.refresh_enabled;paint();}
+    if(s.auto_recycle!==undefined&&s.auto_recycle!==cfg.auto_recycle){cfg.auto_recycle=s.auto_recycle;paint();}
     times(s.timings||{});
 
     $("log").innerHTML=(s.logs||[]).map(l=>{
