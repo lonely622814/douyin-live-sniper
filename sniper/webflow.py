@@ -231,18 +231,23 @@ class WebFlow:
         match = re.search(r"(\d{6,})", url or "")
         return match.group(1) if match else (url or "")
 
-    def goto_room(self) -> bool:
-        """进直播间。房间号一致就不重复导航（导航会重新加载整个页面）。"""
+    def goto_room(self, force: bool = False) -> bool:
+        """进直播间。房间号一致就不重复导航（导航会重新加载整个页面）。
+
+        force=True 时不管当前在哪都重新导航一次 —— 用户换直播间时要用。
+        """
         if not self.ensure_browser():
             return False
         session = self.attach()
         current = session.evaluate("location.href") or ""
         want = self.room_id(self.room_url)
         have = self.room_id(current)
-        if want and want != have:
+        if force or (want and want != have):
             self.note(f"进入直播间 {self.room_url}")
             session.navigate(self.room_url)
             time.sleep(4.5)
+            # 换房间后页面整个重载，旧的注入脚本和 iframe 会话都作废
+            self._drop_accompany()
         return True
 
     def reload_page(self) -> bool:

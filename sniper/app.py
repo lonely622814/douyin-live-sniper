@@ -95,6 +95,63 @@ class Controller:
         if message[:1] in ("★", "✅", "⚠", "⛔"):
             self.diag(message)
 
+    def update_config(self, payload: dict) -> None:
+        """界面改了配置。
+
+        改直播间不能只写配置：网页那边（flow.room_url）是构造时拷的一份，
+        不同步过去的话，程序会一直守在旧直播间里 —— 用户反馈过"换了地址没用"。
+        """
+        old_room = (self.cfg.room_url or "").strip()
+        self.cfg.update(payload)
+        new_room = (self.cfg.room_url or "").strip()
+        if new_room == old_room:
+            self.log(
+                f"配置已更新：演练模式={'开' if self.cfg.dry_run else '关'} "
+                f"刷新={'开' if self.cfg.refresh_enabled else '关'}"
+            )
+            return
+        # —— 切直播间：所有跟"这个房间"绑定的状态都要清掉 ——
+        self.flow.room_url = new_room
+        self.room_name = "-"
+        self.light_state = "-"
+        self.lit_value = "-"
+        self.first_gift = "-"
+        self.armed = False
+        self.room_live_state = None
+        self.already_done_today = False
+        self.monitor_installed = False
+        self.page_title = "-"
+        self.page_challenge = False
+        self.log(f"切换直播间 → {new_room or '(未填)'}，正在重新进入并装监听")
+        self.diag(f"切换直播间 -> {new_room or '(空)'}")
+        if new_room:
+            threading.Thread(target=self._switch_room, daemon=True,
+                             name="switch-room").start()
+
+    def _switch_room(self) -> None:
+        """真正把浏览器切到新直播间：导航 → 装监听 → 读一次状态。"""
+        if not self._action_lock.acquire(timeout=60):
+            self.log("切换直播间：有别的操作在占用，先不切")
+            return
+        self._switching = True          # 切换期间让守候循环别插进来刷新
+        try:
+            if not self.flow.ensure_browser():
+                self.log("切换直播间：浏览器没起来")
+                return
+            self.flow.room_url = self.cfg.room_url
+            self.flow.goto_room(force=True)
+            self.install_monitor()
+            self.update_room_name()
+            self.refresh_state()
+            self.log(f"已切到新直播间：{self.room_name}")
+            self.diag(f"切换完成 房间={self.room_name}")
+        except Exception as exc:
+            self.log(f"切换直播间失败：{exc}")
+            self.diag(f"切换直播间失败：{exc}")
+        finally:
+            self._switching = False
+            self._action_lock.release()
+
     # ---------- 诊断日志 ----------
 
     @staticmethod
@@ -523,6 +580,10 @@ class Controller:
                     self.watch_on = True
                     self.log("开播监听：已开启，继续守候")
                     self.diag("监听开启")
+                # 正在换直播间：这几秒别去刷页面，免得跟导航打架
+                if getattr(self, "_switching", False):
+                    time.sleep(0.2)
+                    continue
                 # 已经开播：停止刷新，只留低频的收拾工作（装监听、保持架枪）
                 if self.room_live_state is True:
                     if time.monotonic() - last_house > 1.0:

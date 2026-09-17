@@ -94,11 +94,8 @@ def make_server(controller, port: int) -> ThreadingHTTPServer:
                 return
 
             if path == "/api/config":
-                controller.cfg.update(payload)
-                controller.log(
-                    f"配置已更新：直播间={controller.cfg.room_url or '(未填)'} "
-                    f"演练模式={'开' if controller.cfg.dry_run else '关'}"
-                )
+                # 交给控制器处理：改直播间要顺带把浏览器切过去，不能只改配置
+                controller.update_config(payload)
                 self._send(200, json.dumps({"ok": True}))
             elif path == "/api/action":
                 result = controller.run_action(str(payload.get("action", "")), payload)
