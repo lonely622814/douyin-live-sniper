@@ -1,5 +1,8 @@
 # ── 绝对不能提交：浏览器配置目录里是你抖音的登录态 ──
+# Chrome / Edge / 自定义浏览器各一个目录，三个都要挡
 chrome-profile/
+edge-profile/
+custom-profile/
 
 # ── 个人配置与标定数据（每台机器不一样）──
 config.json
