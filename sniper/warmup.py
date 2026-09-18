@@ -23,7 +23,7 @@ from . import browser, clock, fansclub, timebase
 def attach(port: int, room: str | None, launch: bool = True):
     """拿到直播间页面的会话；必要时启动浏览器。"""
     if launch and not browser.is_running(port):
-        profile = pathlib.Path(__file__).resolve().parent.parent / "chrome-profile"
+        profile = browser.profile_dir(browser.resolve_browser("auto")[0])
         url = room or "https://live.douyin.com/"
         browser.launch(url, profile, port=port)
         time.sleep(1.0)

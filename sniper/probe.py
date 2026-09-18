@@ -81,7 +81,8 @@ MARK_JS = r"""
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="抖音抢送 - 页面调试探针")
     parser.add_argument("--port", type=int, default=browser.DEFAULT_PORT)
-    parser.add_argument("--profile", default=None, help="浏览器配置目录（默认 chrome-profile/）")
+    parser.add_argument("--profile", default=None,
+                        help="浏览器配置目录（默认按实际使用的浏览器：chrome-profile/ 或 edge-profile/）")
     parser.add_argument("--launch", metavar="URL", help="启动浏览器并打开 URL")
     parser.add_argument("--list", action="store_true", help="列出所有页面目标")
     parser.add_argument("--open", metavar="URL", help="新开标签页")
@@ -114,7 +115,12 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.launch:
-        profile = pathlib.Path(args.profile or (pathlib.Path(__file__).parent.parent / "chrome-profile"))
+        if args.profile:
+            profile = pathlib.Path(args.profile)
+        else:
+            from . import browser as _browser
+
+            profile = _browser.profile_dir(_browser.resolve_browser("auto")[0])
         browser.launch(args.launch, profile, port=args.port)
         target = browser.wait_for_page(args.port, "douyin", timeout=30)
         print(f"已启动，页面：{target['url']}")

@@ -158,6 +158,7 @@
   .stat.c{flex-direction:column;align-items:flex-start;gap:1px;padding:7px 11px}
   .stat.c span{max-width:100%}
   button.mini{padding:4px 10px;font-size:11.5px;border-radius:8px;font-weight:500}
+  select.mini{padding:4px 6px;font-size:11.5px;border-radius:8px;width:auto;max-width:190px}
 
   /* 运行日志独占右列整个高度 */
   .cols>.logbox{grid-column:2;min-height:0}
@@ -310,7 +311,13 @@
   </div>
 
   <div class="box logbox">
-    <div class="cap">运行日志<em>全部</em>
+    <div class="cap">运行日志<em id="browser-hint">浏览器：-</em>
+      <select class="mini" id="browser" title="用哪个浏览器打开直播间（切换后需要重启控制台）">
+        <option value="auto">自动（Chrome / Edge）</option>
+        <option value="chrome">Google Chrome</option>
+        <option value="edge">Microsoft Edge</option>
+        <option value="custom">自定义路径…</option>
+      </select>
       <button class="mini" id="btn-openlogs">诊断日志</button></div>
     <div id="log"></div>
   </div>
@@ -331,7 +338,7 @@ async function loadCfg(){
   $("refresh_interval").value = cfg.refresh_interval ?? 1;
   $("refresh_wait_load").checked = !!cfg.refresh_wait_load;
   paintRooms();
-  paint(); chips(cfg.send_times_raw);
+  paint(); paintBrowser(); chips(cfg.send_times_raw);
 }
 function paintRooms(){
   const sel = $("rooms"); sel.innerHTML = "";
@@ -355,6 +362,28 @@ $("rooms").onchange = async () => {
   cfg.room_url = v;
   await post("/api/config", {room_url: v});
 };
+/* 浏览器选择：auto / chrome / edge / 自定义 exe 路径 */
+function paintBrowser(){
+  const v = (cfg.browser || "auto").trim();
+  const isPreset = ["auto","chrome","edge"].includes(v);
+  $("browser").value = isPreset ? v : "custom";
+}
+$("browser").onchange = async () => {
+  let v = $("browser").value;
+  if (v === "custom"){
+    const p = prompt("填浏览器 exe 的完整路径（其他 Chromium 浏览器也行）",
+                     (cfg.browser && !["auto","chrome","edge"].includes(cfg.browser))
+                       ? cfg.browser : "C:\\\\Program Files\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe");
+    if (!p || !p.trim()){ paintBrowser(); return; }
+    v = p.trim();
+  }
+  cfg.browser = v;
+  paintBrowser();
+  await post("/api/config", {browser: v});
+  alert(v === "auto" ? "已设为自动（优先 Chrome，其次 Edge）\\n切换浏览器需要重启控制台。"
+                     : "已设为：" + v + "\\n切换浏览器需要重启控制台，并且要在新窗口里重新登录一次抖音。");
+};
+
 function paintRefresh(){
   const mode = cfg.refresh_mode || "hard";
   [...$("seg-refresh").children].forEach(b=>{
@@ -498,6 +527,14 @@ async function tick(){
     $("s-beat").textContent=beat==null?"-":(beat.toFixed(1)+" 秒前");
     $("s-gift").textContent=s.first_gift||"还没有人送出";
     $("s-ticks").textContent=(s.monitor_ticks||0)+" 次";
+    /* 当前实际用哪个浏览器（状态里带 browser_label / browser_kind） */
+    if(s.browser_kind){
+      const label = s.browser_label || s.browser_kind;
+      const found = s.browser_kind !== "auto";
+      $("browser-hint").textContent = "浏览器：" + (found ? label : "⚠ 没找到");
+      $("browser-hint").title = (s.browser_path || "") +
+        (found ? "" : "  没找到浏览器：请在右边选一个，或确认已安装 Chrome/Edge");
+    }
     /* 最近一次刷新：事后对账要看的就是这一条——它证明"程序当时在不在按节奏刷" */
     if(s.last_reload_age==null){
       $("s-reload").textContent="还没刷过";

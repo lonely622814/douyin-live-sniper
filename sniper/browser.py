@@ -1,10 +1,11 @@
-"""Chrome 的启动、接管与页面会话。
+"""浏览器的启动、接管与页面会话（Chrome / Edge 都支持，都是 Chromium 内核）。
 
 要点：
-* 用**独立的浏览器配置目录**（`chrome-profile/`），和你平时用的 Chrome 完全隔离。
+* 用**独立的浏览器配置目录**（Chrome 用 `chrome-profile/`，Edge 用 `edge-profile/`），
+  和你平时用的浏览器完全隔离，两种浏览器也不会互相串配置。
   第一次需要在这个窗口里登录抖音，之后登录状态一直保留。
 * 打开远程调试端口，只监听本机（127.0.0.1），外部无法访问。
-* 关掉 Chrome 的后台节流，避免直播页在后台被降频。
+* 关掉浏览器的后台节流，避免直播页在后台被降频。
 """
 
 from __future__ import annotations
@@ -19,21 +20,61 @@ import urllib.request
 from .cdp import CDP
 
 DEFAULT_PORT = 9333
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-CHROME_CANDIDATES = (
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-)
+# 支持的浏览器（都是 Chromium 内核，用的是同一套调试协议）
+BROWSER_CANDIDATES = {
+    "chrome": (
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ),
+    "edge": (
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ),
+}
+BROWSER_LABELS = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "custom": "自定义"}
+# 每种浏览器各自的配置目录，绝不共用（共用会把登录态和缓存搅在一起）
+PROFILE_DIRS = {
+    "chrome": "chrome-profile",
+    "edge": "edge-profile",
+    "custom": "custom-profile",
+}
 
 
-def find_browser() -> pathlib.Path:
-    for candidate in CHROME_CANDIDATES:
-        path = pathlib.Path(candidate)
+def resolve_browser(prefer: str = "auto") -> tuple[str, pathlib.Path | None]:
+    """决定用哪个浏览器。
+
+    prefer 可以是 ``auto``（先 Chrome 后 Edge）、``chrome``、``edge``，
+    或者直接给一个 exe 完整路径（其他 Chromium 浏览器/便携版也能用）。
+    返回 (标识, exe 路径)；找不到就是 (标识, None)。
+    """
+    pref = (prefer or "auto").strip()
+    if pref.lower() not in ("auto", "chrome", "edge"):
+        path = pathlib.Path(pref)
         if path.exists():
-            return path
-    raise FileNotFoundError("没找到 Chrome 或 Edge，请确认已安装。")
+            return "custom", path
+        pref = "auto"                     # 路径无效就退回自动找
+    wanted = ("chrome", "edge") if pref.lower() == "auto" else (pref.lower(),)
+    for kind in wanted:
+        for candidate in BROWSER_CANDIDATES.get(kind, ()):
+            path = pathlib.Path(candidate)
+            if path.exists():
+                return kind, path
+    return (pref.lower() if pref.lower() in ("chrome", "edge") else "auto"), None
+
+
+def find_browser(prefer: str = "auto") -> pathlib.Path:
+    """只要路径的老接口（找不到就抛）。"""
+    kind, path = resolve_browser(prefer)
+    if path is None:
+        raise FileNotFoundError("没找到 Chrome 或 Edge，请确认已安装（也可以在控制台里指定路径）。")
+    return path
+
+
+def profile_dir(kind: str) -> pathlib.Path:
+    """这种浏览器用哪个配置目录。"""
+    return PROJECT_ROOT / PROFILE_DIRS.get(kind, "custom-profile")
 
 
 def _http_json(port: int, path: str, method: str = "GET", timeout: float = 1.0):
@@ -51,26 +92,29 @@ def is_running(port: int = DEFAULT_PORT) -> bool:
         return False
 
 
-def kill_profile_chrome(profile_dir: pathlib.Path) -> int:
-    """关掉占用我们这个配置目录、但没开调试端口的 Chrome。
+def kill_browser_profile(profile_path: pathlib.Path) -> int:
+    """关掉占用我们这个配置目录、但没开调试端口的浏览器进程。
 
-    为什么需要：Chrome 是"单实例多窗口"的，如果已经有一个同配置目录的实例在跑，
+    为什么需要：Chromium 系浏览器都是"单实例多窗口"的，如果已经有一个同配置目录的实例在跑，
     新启动时带的 --remote-debugging-port 会被忽略（请求被转交给老实例），
     结果就是端口永远起不来、程序连不上浏览器、所有操作超时。
     （踩过：用 --app 单独开了控制台窗口，就把整个程序搞瘫了。）
+
+    注意：这里**不能按进程名过滤**（原来只查 chrome.exe，用 Edge 时等于没清理），
+    改成按命令行里出现的配置目录来认，Chrome / Edge / 自定义浏览器一视同仁。
     """
     import json
     import subprocess
 
-    key = str(profile_dir).replace("/", "\\").lower()
+    key = str(profile_path).replace("/", "\\").lower()
     try:
         raw = subprocess.run(
             [
                 "powershell", "-NoProfile", "-Command",
-                "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                "Get-CimInstance Win32_Process | "
                 "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
             ],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=40,
         ).stdout
         items = json.loads(raw or "[]")
         if isinstance(items, dict):
@@ -93,6 +137,10 @@ def kill_profile_chrome(profile_dir: pathlib.Path) -> int:
     return killed
 
 
+# 老名字，留个别处调用兼容
+kill_profile_chrome = kill_browser_profile
+
+
 def wait_for_port(port: int = DEFAULT_PORT, timeout: float = 25.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -107,13 +155,14 @@ def launch(
     profile_dir: pathlib.Path,
     port: int = DEFAULT_PORT,
     extra_args=(),
+    prefer: str = "auto",
 ) -> subprocess.Popen | None:
     """启动浏览器。已经在跑就直接复用，返回 None。"""
     if is_running(port):
         return None
 
     profile_dir.mkdir(parents=True, exist_ok=True)
-    executable = find_browser()
+    executable = find_browser(prefer)
     args = [
         str(executable),
         f"--remote-debugging-port={port}",

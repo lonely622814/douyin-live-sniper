@@ -27,7 +27,7 @@ import time
 import webbrowser
 from datetime import datetime, timedelta, timezone
 
-from . import config, panel, timebase, webflow
+from . import browser, config, panel, timebase, webflow
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BEIJING = timezone(timedelta(hours=8))
@@ -50,7 +50,8 @@ class Controller:
     def __init__(self, cfg: config.Config):
         self.cfg = cfg
         self.tb: timebase.TimeBase | None = None
-        self.flow = webflow.WebFlow(port=cfg.cdp_port, room_url=cfg.room_url)
+        self.flow = webflow.WebFlow(port=cfg.cdp_port, room_url=cfg.room_url,
+                                    browser_pref=cfg.browser)
         self.logs: collections.deque = collections.deque(maxlen=500)
         self.light_state = "-"
         self.first_gift = "-"
@@ -102,8 +103,19 @@ class Controller:
         不同步过去的话，程序会一直守在旧直播间里 —— 用户反馈过"换了地址没用"。
         """
         old_room = (self.cfg.room_url or "").strip()
+        old_browser = (self.cfg.browser or "auto").strip()
         self.cfg.update(payload)
         new_room = (self.cfg.room_url or "").strip()
+        new_browser = (self.cfg.browser or "auto").strip()
+        if new_browser != old_browser:
+            kind, path = browser.resolve_browser(new_browser)
+            label = browser.BROWSER_LABELS.get(kind, kind)
+            self.log(f"浏览器设置已改为「{label}」"
+                     f"（{'已找到：' + str(path) if path else '⚠ 没找到，请检查路径'}）")
+            self.diag(f"浏览器设置 -> {new_browser}（{label}，{path or '未找到'}）")
+            if new_browser != "auto":
+                self.log("切换浏览器需要重启控制台才会真正生效"
+                         "（会新开一个对应浏览器的窗口，需要重新登录抖音一次）")
         if new_room == old_room:
             self.log(
                 f"配置已更新：演练模式={'开' if self.cfg.dry_run else '关'} "
@@ -209,6 +221,10 @@ class Controller:
             "offset_ms": self.tb.cal.offset_ms if self.tb else None,
             "sigma_ms": self.tb.cal.sigma_ns / 1e6 if self.tb else None,
             "browser": "已连接" if self.flow.session else "-",
+            "browser_kind": self.flow.browser_kind,
+            "browser_label": browser.BROWSER_LABELS.get(self.flow.browser_kind,
+                                                        self.flow.browser_kind),
+            "browser_path": str(self.flow.browser_path or ""),
             "room": self.room_name,
             "panel": self.light_state,
             "lit_value": self.lit_value,
@@ -1120,7 +1136,8 @@ class Controller:
 
 
 def open_panel_window(
-    url: str, width: int = 1040, height: int = 760, room_url: str = ""
+    url: str, width: int = 1040, height: int = 760, room_url: str = "",
+    browser_pref: str = "auto",
 ) -> None:
     """把控制台开成横版小窗口，并且和直播间**在同一个窗口里**（不同标签）。
 
@@ -1148,7 +1165,10 @@ def open_panel_window(
                 # 如果拿控制台地址启动，就会先多开一个控制台窗口，
                 # 之后直播间又在另一个窗口打开 —— 变成两个窗口（用户反馈过）。
                 browser_mod.launch(
-                    room_url or url, ROOT / "chrome-profile", port=port
+                    room_url or url,
+                    browser_mod.profile_dir(browser_mod.resolve_browser(browser_pref)[0]),
+                    port=port,
+                    prefer=browser_pref,
                 )
                 browser_mod.wait_for_port(port, timeout=25)
             with urllib.request.urlopen(
@@ -1238,7 +1258,8 @@ def main(argv=None) -> int:
 
     if not args.no_browser:
         threading.Timer(
-            0.7, lambda: open_panel_window(url, room_url=cfg.room_url)
+            0.7, lambda: open_panel_window(url, room_url=cfg.room_url,
+                                           browser_pref=cfg.browser)
         ).start()
     threading.Thread(target=controller.scheduler, daemon=True, name="scheduler").start()
     # 监听线程**始终**启动：界面上的"正在监听"和主播状态都靠它。

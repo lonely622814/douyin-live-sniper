@@ -148,9 +148,13 @@ class SendResult:
 class WebFlow:
     """全部通过页面 JS 完成，不使用任何操作系统级输入。"""
 
-    def __init__(self, port: int = browser.DEFAULT_PORT, room_url: str = ""):
+    def __init__(self, port: int = browser.DEFAULT_PORT, room_url: str = "",
+                 browser_pref: str = "auto"):
         self.port = port
         self.room_url = room_url
+        self.browser_pref = browser_pref
+        # 认一次浏览器（Chrome / Edge / 自定义路径），后面配置目录都按它来
+        self.browser_kind, self.browser_path = browser.resolve_browser(browser_pref)
         self.session: cdp.CDP | None = None
         self._acc_session: cdp.CDP | None = None   # 陪伴之旅 iframe 的会话（复用）
         self._acc_ws: str = ""
@@ -204,7 +208,7 @@ class WebFlow:
 
         # 端口没起来：先清掉"占了配置目录但没开调试端口"的残留实例，
         # 否则新实例带的调试端口会被忽略，程序永远连不上浏览器。
-        killed = browser.kill_profile_chrome(self._profile_dir())
+        killed = browser.kill_browser_profile(self._profile_dir())
         if killed:
             self.note(f"清理了 {killed} 个没有调试端口的残留浏览器进程")
             time.sleep(1.5)
@@ -212,7 +216,8 @@ class WebFlow:
         if not self.room_url:
             self.note("直播间地址是空的")
             return False
-        browser.launch(self.room_url, self._profile_dir(), port=self.port)
+        browser.launch(self.room_url, self._profile_dir(), port=self.port,
+                       prefer=self.browser_pref)
         if not browser.wait_for_port(self.port, timeout=25):
             self.note("浏览器调试端口没起来")
             return False
@@ -220,11 +225,9 @@ class WebFlow:
         self.attach()
         return True
 
-    @staticmethod
-    def _profile_dir():
-        import pathlib
-
-        return pathlib.Path(__file__).resolve().parent.parent / "chrome-profile"
+    def _profile_dir(self):
+        """这台浏览器自己的配置目录（Chrome 和 Edge 分开，互不影响）。"""
+        return browser.profile_dir(self.browser_kind)
 
     @staticmethod
     def room_id(url: str) -> str:
