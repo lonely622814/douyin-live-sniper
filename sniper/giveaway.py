@@ -69,6 +69,17 @@ JS_CLICK_LEVEL = r"""
 })(__LEVEL__)
 """
 
+# ── 入口图标的屏幕坐标（JS 点击无效时，改用真实鼠标事件） ──
+JS_BAG_CENTER = r"""
+(function () {
+  var bag = document.querySelector('img[src*="lottery"]');
+  if (!bag) return {ok: false, why: 'no-icon'};
+  var r = bag.getBoundingClientRect();
+  if (r.width < 4 || r.height < 4) return {ok: false, why: 'icon-invisible'};
+  return {ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2)};
+})()
+"""
+
 # ── 读面板：人数 / 倒计时 / 奖品 / 参与条件 / 按钮文案 ──
 JS_READ_PANEL = r"""
 (function () {
@@ -232,15 +243,46 @@ class GiveawayBot:
     # ---------- 面板 ----------
 
     def open_panel(self) -> dict:
-        """点开福袋面板（逐级往上点，最多试 3 层）。"""
-        for level in (1, 2, 3):
+        """点开福袋面板。
+
+        两轮尝试：
+          ① JS 逐级点（图标本身 → 父1 → 父2 → 父3），每次最多等 1.2 秒；
+          ② 还打不开就用**真实鼠标事件**（CDP 派发，属于"可信事件"，
+             有些组件只认真人手势）。
+        """
+        for level in (0, 1, 2, 3):
             clicked = self._evaluate(JS_CLICK_LEVEL.replace("__LEVEL__", str(level)))
             if not isinstance(clicked, dict) or not clicked.get("ok"):
-                return {"ok": False, "why": (clicked or {}).get("why", "click-failed")}
-            time.sleep(0.7)
-            panel = self.read_panel()
-            if panel.get("open"):
-                return {"ok": True, "level": level, "panel": panel}
+                why = (clicked or {}).get("why", "click-failed")
+                if why == "no-icon":
+                    return {"ok": False, "why": "no-icon（福袋刚好结束了）"}
+                continue
+            for _ in range(5):                      # 最多等 1.2 秒
+                time.sleep(0.25)
+                panel = self.read_panel()
+                if panel.get("open"):
+                    return {"ok": True, "level": level, "panel": panel, "how": "JS点击"}
+
+        # ② 真实鼠标事件兜底
+        center = self._evaluate(JS_BAG_CENTER)
+        if isinstance(center, dict) and center.get("ok") and self.session is not None:
+            x, y = center["x"], center["y"]
+            self.diag(f"JS 点击没打开面板，改用真实鼠标事件 ({x},{y})")
+            try:
+                self.session.call("Input.dispatchMouseEvent",
+                                  {"type": "mousePressed", "x": x, "y": y,
+                                   "button": "left", "clickCount": 1})
+                time.sleep(0.06)
+                self.session.call("Input.dispatchMouseEvent",
+                                  {"type": "mouseReleased", "x": x, "y": y,
+                                   "button": "left", "clickCount": 1})
+            except Exception as exc:
+                self.diag(f"真实鼠标事件失败：{exc}")
+            for _ in range(8):
+                time.sleep(0.25)
+                panel = self.read_panel()
+                if panel.get("open"):
+                    return {"ok": True, "level": -1, "panel": panel, "how": "真实鼠标"}
         return {"ok": False, "why": "panel-not-opened"}
 
     def read_panel(self) -> dict:
@@ -327,12 +369,22 @@ class GiveawayBot:
         if time.time() - self._recent_attempt.get(key, 0.0) < 30:
             return {"state": "cooldown"}
 
+        # 看到福袋立刻出声，别让人以为程序没反应
+        if self.last_result != f"发现福袋 {info.get('countdown','')}":
+            self.log(f"👀 发现福袋：{self.room_name} · 倒计时 {info.get('countdown') or '?'}"
+                     f"（{left if left is not None else '?'} 秒后开奖），正在点开面板…")
+            self.last_result = f"发现福袋 {info.get('countdown','')}"
+
         # 开面板
         opened = self.open_panel()
         if not opened.get("ok"):
             self.failed_total += 1
-            self.diag(f"福袋面板没打开：{opened.get('why')}")
-            return {"state": "panel-failed", "why": opened.get("why")}
+            self._recent_attempt[key] = time.time()
+            why = opened.get("why")
+            self.log(f"⚠ 福袋面板没打开（{why}）：{self.room_name}"
+                     + ("  ← 通常是福袋刚好结束了" if "no-icon" in str(why) else ""))
+            self.diag(f"福袋面板没打开：{why} 房间={self.room_name}")
+            return {"state": "panel-failed", "why": why}
 
         panel = opened.get("panel") or {}
         self.people = panel.get("people") or "-"
