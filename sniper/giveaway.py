@@ -56,6 +56,7 @@ JS_FIND = r"""
 """
 
 # ── 点入口：逐级往上点，哪一级能打开面板就用哪一级 ──
+#    注意：__LEVEL__ 是占位符，替换后必须是"调用"，不能只替换参数名（踩过：变成 function(1) 直接语法错误）
 JS_CLICK_LEVEL = r"""
 (function (level) {
   var bag = document.querySelector('img[src*="lottery"]');
@@ -65,7 +66,7 @@ JS_CLICK_LEVEL = r"""
   try { el.click(); } catch (e) { return {ok: false, why: String(e).slice(0, 60)}; }
   return {ok: true, cls: String(el.className || '').slice(0, 50),
           w: Math.round(el.getBoundingClientRect().width)};
-})()
+})(__LEVEL__)
 """
 
 # ── 读面板：人数 / 倒计时 / 奖品 / 参与条件 / 按钮文案 ──
@@ -183,12 +184,13 @@ def parse_countdown(text: str) -> int | None:
 class GiveawayBot:
     """一次 tick 就是一轮：看入口 → 判定 → 开面板 → 参与 → 记录。"""
 
-    def __init__(self, flow, cfg, log, diag=None, timing=None):
+    def __init__(self, flow, cfg, log, diag=None, timing=None, record_path=None):
         self.flow = flow
         self.cfg = cfg
         self.log = log
         self.diag = diag or (lambda _m: None)
         self.timing = timing or (lambda _n, _ms: None)
+        self.record_path = record_path        # None = 写默认的 logs/福袋红包记录.log
         self.session = None
 
         # ── 统计 ──
@@ -204,6 +206,7 @@ class GiveawayBot:
         self._comment_times: list[float] = []      # 评论时间戳（全局限流用）
         self._room_comment: dict[str, list[float]] = {}   # 每房间评论时间戳
         self._seen_bag: set[str] = set()           # 已处理过的福袋（房间+倒计时）避免重复参与
+        self._recent_attempt: dict[str, float] = {}  # 最近尝试过的时间（失败后冷却，别猛点）
         self.follow_log = []                       # 自动关注记录（阶段 4 会落盘）
 
     # ---------- 基础 ----------
@@ -231,7 +234,7 @@ class GiveawayBot:
     def open_panel(self) -> dict:
         """点开福袋面板（逐级往上点，最多试 3 层）。"""
         for level in (1, 2, 3):
-            clicked = self._evaluate(JS_CLICK_LEVEL.replace("level", str(level)))
+            clicked = self._evaluate(JS_CLICK_LEVEL.replace("__LEVEL__", str(level)))
             if not isinstance(clicked, dict) or not clicked.get("ok"):
                 return {"ok": False, "why": (clicked or {}).get("why", "click-failed")}
             time.sleep(0.7)
@@ -321,6 +324,8 @@ class GiveawayBot:
         key = f"{info.get('url','')}|{info.get('countdown','')}"
         if key in self._seen_bag:
             return {"state": "already-handled"}
+        if time.time() - self._recent_attempt.get(key, 0.0) < 30:
+            return {"state": "cooldown"}
 
         # 开面板
         opened = self.open_panel()
@@ -375,11 +380,31 @@ class GiveawayBot:
         self.timing("福袋参与", cost_ms)
         if not joined.get("ok"):
             self.failed_total += 1
+            self._recent_attempt[key] = time.time()
             self.close_panel()
             self.diag(f"点参与失败：{joined.get('why')}")
             return {"state": "join-failed", "why": joined.get("why")}
 
+        # ★ 关键：点完必须回头确认，不能"点了就算成功"（否则会骗人）
+        time.sleep(1.5)
+        after = self.read_panel()
+        cond_done = any("已" in str(s) for s in (after.get("condState") or []))
+        btn_gone = "参与" not in (after.get("button") or "参与")
+        verified = bool(after.get("joined") or cond_done or btn_gone or not after.get("open"))
+        if not verified:
+            self.failed_total += 1
+            self._recent_attempt[key] = time.time()
+            self.close_panel()
+            self.last_result = "点了但没确认到参与"
+            self.log(f"⚠ 福袋点了但没确认到参与（可能没生效）：{self.room_name} · "
+                     f"点击的按钮「{joined.get('text')}」· 面板仍显示「{after.get('button') or ''}」"
+                     f"{after.get('condState') or ''}")
+            self.diag(f"福袋参与未确认 房间={self.room_name} 点后按钮={after.get('button')} "
+                      f"条件={after.get('condState')}")
+            return {"state": "join-unverified"}
+
         self._seen_bag.add(key)
+        self._recent_attempt[key] = time.time()
         self.joined_total += 1
         self.joined_today += 1
         if self.need_comment(panel):
@@ -405,10 +430,14 @@ class GiveawayBot:
         try:
             import pathlib
 
-            root = pathlib.Path(__file__).resolve().parent.parent
-            log_dir = root / "logs"
-            log_dir.mkdir(exist_ok=True)
-            with (log_dir / "福袋红包记录.log").open("a", encoding="utf-8") as fh:
+            if self.record_path:
+                path = pathlib.Path(self.record_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                root = pathlib.Path(__file__).resolve().parent.parent
+                path = root / "logs" / "福袋红包记录.log"
+                path.parent.mkdir(exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
                 fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}|{line}\n")
         except Exception:
             pass
