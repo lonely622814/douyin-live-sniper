@@ -40,10 +40,33 @@ JS_FIND = r"""
   function box(el) { if (!el) return null; var r = el.getBoundingClientRect();
     return {w: Math.round(r.width), h: Math.round(r.height),
             x: Math.round(r.left), y: Math.round(r.top)}; }
-  var bag = document.querySelector('img[src*="lottery"]');
-  var rp = document.querySelector('div.redpacket');
+  // ★ 福袋入口的两种形态（实测都遇到过）：
+  //   ① 图标是 CDN 图片：img[src*="lottery"]
+  //   ② 图标是内嵌 base64 图片（换了一版渲染）：槽位 div[class*="__biz"] 有尺寸 + 里面是倒计时文字
+  //   所以优先看图，找不到就看"有尺寸且带倒计时的活动槽位"。
+  function bagEntry() {
+    var byImg = document.querySelector('img[src*="lottery"]');
+    if (byImg) return byImg;
+    var slots = document.querySelectorAll('div[class*="__biz"]');
+    for (var i = 0; i < slots.length; i++) {
+      var e = slots[i], r = e.getBoundingClientRect();
+      var t = (e.innerText || '').trim();
+      if (r.width > 10 && r.height > 10 && /^\d{1,2}:\d{2}$/.test(t)) return e;
+    }
+    return null;
+  }
+  function redpacketEntry() {
+    var list = document.querySelectorAll('div[class*="redpacket"]');
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i].getBoundingClientRect();
+      if (r.width > 10 && r.height > 10) return list[i];
+    }
+    return null;
+  }
+  var bag = bagEntry();
+  var rp = redpacketEntry();
   var cd = '';
-  if (bag && bag.parentElement) cd = (bag.parentElement.innerText || '').trim();
+  if (bag) cd = (bag.innerText || (bag.parentElement || {}).innerText || '').trim();
   var rpText = rp ? (rp.innerText || '').trim() : '';
   return {
     bag: !!bag, bagBox: box(bag),
@@ -59,7 +82,18 @@ JS_FIND = r"""
 #    注意：__LEVEL__ 是占位符，替换后必须是"调用"，不能只替换参数名（踩过：变成 function(1) 直接语法错误）
 JS_CLICK_LEVEL = r"""
 (function (level) {
-  var bag = document.querySelector('img[src*="lottery"]');
+  function bagEntry() {
+    var byImg = document.querySelector('img[src*="lottery"]');
+    if (byImg) return byImg;
+    var slots = document.querySelectorAll('div[class*="__biz"]');
+    for (var i = 0; i < slots.length; i++) {
+      var e = slots[i], r = e.getBoundingClientRect();
+      var t = (e.innerText || '').trim();
+      if (r.width > 10 && r.height > 10 && /^\d{1,2}:\d{2}$/.test(t)) return e;
+    }
+    return null;
+  }
+  var bag = bagEntry();
   if (!bag) return {ok: false, why: 'no-icon'};
   var el = bag;
   for (var i = 0; i < level && el.parentElement; i++) el = el.parentElement;
@@ -72,7 +106,18 @@ JS_CLICK_LEVEL = r"""
 # ── 入口图标的屏幕坐标（JS 点击无效时，改用真实鼠标事件） ──
 JS_BAG_CENTER = r"""
 (function () {
-  var bag = document.querySelector('img[src*="lottery"]');
+  function bagEntry() {
+    var byImg = document.querySelector('img[src*="lottery"]');
+    if (byImg) return byImg;
+    var slots = document.querySelectorAll('div[class*="__biz"]');
+    for (var i = 0; i < slots.length; i++) {
+      var e = slots[i], r = e.getBoundingClientRect();
+      var t = (e.innerText || '').trim();
+      if (r.width > 10 && r.height > 10 && /^\d{1,2}:\d{2}$/.test(t)) return e;
+    }
+    return null;
+  }
+  var bag = bagEntry();
   if (!bag) return {ok: false, why: 'no-icon'};
   var r = bag.getBoundingClientRect();
   if (r.width < 4 || r.height < 4) return {ok: false, why: 'icon-invisible'};
@@ -80,46 +125,80 @@ JS_BAG_CENTER = r"""
 })()
 """
 
-# ── 读面板：人数 / 倒计时 / 奖品 / 参与条件 / 按钮文案 ──
+# ── 读面板：**按文字读**（类名是哈希的，每次渲染都可能变，不能依赖） ──
 JS_READ_PANEL = r"""
 (function () {
   var root = document.querySelector('#lottery_close_cotainer')
+          || document.querySelector('[id*="lottery_close"]')
           || document.querySelector('#short_touch_land_lottery_land_userMain');
   if (!root) return {open: false};
-  var q = function (sel) { return root.querySelector(sel); };
-  var t = function (sel) { var e = q(sel); return e ? (e.innerText || '').trim() : ''; };
-  var btn = root.querySelector('[role="button"]');
-  if (!btn) {
-    var cands = [].slice.call(root.querySelectorAll('div,button,span'))
-      .filter(function (d) { return d.children.length === 0 &&
-        /参与|领取|立即|一键/.test(d.innerText || ''); });
-    btn = cands.length ? cands[cands.length - 1] : null;
+  var txt = (root.innerText || '').replace(/\s+/g, ' ').trim();
+  function leaf(re) {
+    var hits = [].slice.call(root.querySelectorAll('*')).filter(function (e) {
+      var t = (e.innerText || '').trim();
+      return t && t.length < 60 && e.children.length === 0 && re.test(t);
+    });
+    return hits.length ? (hits[0].innerText || '').trim().slice(0, 50) : '';
   }
-  var conds = [];
-  [].slice.call(root.querySelectorAll('.NXpPiZXN, .mvB8rsOL > div')).forEach(function (e) {
-    var s = (e.innerText || '').trim();
-    if (s) conds.push(s.slice(0, 60));
+  // 参与条件：优先取"发送评论：xxx / 关注主播 / 灯牌"这种具体条件，
+  // 只有"参与条件"这四个字的标题不算条件（踩过：只读到标题就没法判断要不要花钱）
+  function condText() {
+    var cands = [].slice.call(root.querySelectorAll('*')).filter(function (e) {
+      var t = (e.innerText || '').trim();
+      return t && t.length < 60 && e.children.length === 0 &&
+             /发送评论|评论：|关注主播|灯牌|粉丝团|分享/.test(t);
+    });
+    if (cands.length) return (cands[0].innerText || '').trim().slice(0, 50);
+    return '';
+  }
+  var mPeople = txt.match(/(\d[\d,]*)\s*人(?:已)?参与/);
+  var mPrize = txt.match(/总\s*([\d,]+)\s*钻/);
+  var mBags = txt.match(/(\d+)\s*个福袋/);
+  var mCd = txt.match(/(\d{1,2}:\d{2})/);
+  // 参与按钮：文字短、块头大（>=120x30）的那个
+  var btn = null;
+  [].slice.call(root.querySelectorAll('div,button,[role="button"]')).forEach(function (e) {
+    if (btn) return;
+    var t = (e.innerText || '').trim(), r = e.getBoundingClientRect();
+    if (t && t.length <= 14 && r.width >= 120 && r.height >= 28 &&
+        /参与|领取|立即|一键|关注|已参与|等待|开奖|任务/.test(t)) btn = e;
   });
-  var done = [];
-  [].slice.call(root.querySelectorAll('.KCMgJYJ8')).forEach(function (e) {
-    var s = (e.innerText || '').trim();
-    if (s) done.push(s.slice(0, 20));
-  });
-  // 按钮所在容器的所有文字（按钮文案变化时也能读到）
-  var allText = (root.innerText || '').replace(/\s+/g, ' ').slice(0, 400);
   return {
     open: true,
-    people: t('.vUHz9XGY'),
-    countdown: t('.zpfDzjWY'),
-    prize: t('.CDXK22C2'),
-    bags: t('.efZu_YOi'),
-    conditions: conds,
-    condState: done,
+    people: mPeople ? (mPeople[1] + '人已参与') : '',
+    countdown: mCd ? mCd[1] : '',
+    prize: mPrize ? ('总' + mPrize[1] + '钻') : leaf(/钻|个福袋|奖品/),
+    bags: mBags ? (mBags[1] + '个福袋') : '',
+    conditions: [condText()].filter(Boolean),
+    condState: /已参与|已达成|已领取/.test(txt) ? ['已达成'] :
+               (/未达成|未完成/.test(txt) ? ['未达成'] : []),
     button: btn ? (btn.innerText || '').trim().slice(0, 40) : '',
     buttonCls: btn ? String(btn.className || '').slice(0, 60) : '',
-    joined: /已参与|等待开奖|已领取|已提交/.test(allText),
-    allText: allText
+    joined: /已参与|等待开奖|已领取|已达成|已提交/.test(txt),
+    allText: txt.slice(0, 400)
   };
+})()
+"""
+
+# ── 找"参与"按钮的屏幕坐标（真实鼠标点击用） ──
+JS_BUTTON_CENTER = r"""
+(function () {
+  var root = document.querySelector('#lottery_close_cotainer')
+          || document.querySelector('[id*="lottery_close"]');
+  if (!root) return {ok: false, why: 'no-panel'};
+  var txt = (root.innerText || '').replace(/\s+/g, ' ');
+  if (/已参与|等待开奖|已领取|已达成/.test(txt)) return {ok: false, why: 'already-joined'};
+  var btn = null;
+  [].slice.call(root.querySelectorAll('div,button,[role="button"]')).forEach(function (e) {
+    if (btn) return;
+    var t = (e.innerText || '').trim(), r = e.getBoundingClientRect();
+    if (t && t.length <= 14 && r.width >= 120 && r.height >= 28 &&
+        /参与|领取|立即|一键|关注|任务/.test(t)) btn = e;
+  });
+  if (!btn) return {ok: false, why: 'no-button'};
+  var r = btn.getBoundingClientRect();
+  return {ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2),
+          text: (btn.innerText || '').trim().slice(0, 40)};
 })()
 """
 
@@ -245,39 +324,70 @@ class GiveawayBot:
     def open_panel(self) -> dict:
         """点开福袋面板。
 
-        两轮尝试：
-          ① JS 逐级点（图标本身 → 父1 → 父2 → 父3），每次最多等 1.2 秒；
-          ② 还打不开就用**真实鼠标事件**（CDP 派发，属于"可信事件"，
-             有些组件只认真人手势）。
+        实测结论（2026-09-19）：福袋入口**只认真人鼠标**，element.click() 不管用。
+        所以先派发真实鼠标事件；万一失败，再退回 JS 逐级点。
         """
+        # ① 真实鼠标事件（可信事件）
+        center = self._evaluate(JS_BAG_CENTER)
+        if isinstance(center, dict) and center.get("ok"):
+            for attempt in range(2):
+                self._real_click(center["x"], center["y"])
+                for _ in range(8):                  # 最多等 2 秒
+                    time.sleep(0.25)
+                    panel = self.read_panel()
+                    if panel.get("open"):
+                        return {"ok": True, "level": -1, "panel": panel, "how": "真实鼠标"}
+                time.sleep(0.3)
+        elif isinstance(center, dict) and center.get("why") == "no-icon":
+            return {"ok": False, "why": "no-icon（入口图标不见了）"}
+
+        # ② JS 逐级点兜底
         for level in (0, 1, 2, 3):
             clicked = self._evaluate(JS_CLICK_LEVEL.replace("__LEVEL__", str(level)))
             if not isinstance(clicked, dict) or not clicked.get("ok"):
-                why = (clicked or {}).get("why", "click-failed")
-                if why == "no-icon":
-                    return {"ok": False, "why": "no-icon（福袋刚好结束了）"}
                 continue
-            for _ in range(5):                      # 最多等 1.2 秒
+            for _ in range(5):
                 time.sleep(0.25)
                 panel = self.read_panel()
                 if panel.get("open"):
                     return {"ok": True, "level": level, "panel": panel, "how": "JS点击"}
+        return {"ok": False, "why": "panel-not-opened"}
 
-        # ② 真实鼠标事件兜底
+    def _real_click(self, x: int, y: int) -> None:
+        """派发一次真实鼠标点击（可信事件）——抖音很多组件只认这个。"""
+        if self.session is None:
+            return
+        try:
+            self.session.call("Input.dispatchMouseEvent",
+                              {"type": "mousePressed", "x": x, "y": y,
+                               "button": "left", "clickCount": 1})
+            time.sleep(0.08)
+            self.session.call("Input.dispatchMouseEvent",
+                              {"type": "mouseReleased", "x": x, "y": y,
+                               "button": "left", "clickCount": 1})
+        except Exception as exc:
+            self.diag(f"真实鼠标事件失败：{exc}")
+
+    def join(self) -> dict:
+        """点"参与"按钮——同样用真实鼠标事件（可信事件）。"""
+        target = self._evaluate(JS_BUTTON_CENTER)
+        if not isinstance(target, dict) or not target.get("ok"):
+            why = (target or {}).get("why", "no-button")
+            return {"ok": False, "why": why}
+        self._real_click(target["x"], target["y"])
+        return {"ok": True, "text": target.get("text", ""), "how": "真实鼠标"}
+
+    def _join_by_js(self) -> dict:
+        """万一真实鼠标不可用（没有会话）时的兜底。"""
+        res = self._evaluate(JS_JOIN)
+        return res if isinstance(res, dict) else {"ok": False}
+
+    def _open_panel_legacy(self) -> dict:
+        """（保留：仅 JS 点击的老实现，排查用）"""
         center = self._evaluate(JS_BAG_CENTER)
         if isinstance(center, dict) and center.get("ok") and self.session is not None:
             x, y = center["x"], center["y"]
-            self.diag(f"JS 点击没打开面板，改用真实鼠标事件 ({x},{y})")
-            try:
-                self.session.call("Input.dispatchMouseEvent",
-                                  {"type": "mousePressed", "x": x, "y": y,
-                                   "button": "left", "clickCount": 1})
-                time.sleep(0.06)
-                self.session.call("Input.dispatchMouseEvent",
-                                  {"type": "mouseReleased", "x": x, "y": y,
-                                   "button": "left", "clickCount": 1})
-            except Exception as exc:
-                self.diag(f"真实鼠标事件失败：{exc}")
+            self._real_click(x, y)
             for _ in range(8):
                 time.sleep(0.25)
                 panel = self.read_panel()
@@ -292,10 +402,6 @@ class GiveawayBot:
     def close_panel(self) -> None:
         self._evaluate(JS_CLOSE)
         time.sleep(0.3)
-
-    def join(self) -> dict:
-        res = self._evaluate(JS_JOIN)
-        return res if isinstance(res, dict) else {"ok": False}
 
     # ---------- 规则判定 ----------
 
