@@ -887,11 +887,18 @@ class Controller:
         * "已架好枪 / 正在切直播间 / 手动暂停"时完全不动作；
         * 离预定时间不足 2 分钟就自动停手，把页面让给首发流程。
         """
+        started_at = 0.0
+        last_idle_log = 0.0
+        last_state_log = ""
         while not self._stop.is_set():
             try:
                 if not (self.giveaway_on and self.cfg.giveaway_enabled):
                     time.sleep(0.5)
                     continue
+                if not started_at:
+                    started_at = time.monotonic()
+                    last_idle_log = 0.0
+                    self.log("挂机线程已开始盯直播间（没福袋时会每 60 秒报一次）")
                 if self.armed_paused or self.armed or self._switching:
                     time.sleep(1.0)
                     continue
@@ -907,14 +914,29 @@ class Controller:
 
                 result = self.giveaway.tick()
                 state = (result or {}).get("state", "")
+                now = time.monotonic()
                 if state == "no-bag":
+                    # 没福袋也要让人看见它在干活（每 60 秒报一次，别刷屏）
+                    if now - last_idle_log > 60:
+                        last_idle_log = now
+                        gv = self.giveaway.summary()
+                        waited = int((now - started_at) / 60)
+                        extra = "（有红包元素但没开）" if (result or {}).get("redpacket") else ""
+                        self.log(f"挂机中：{gv['room']} 暂无福袋{extra}，已盯 {waited} 分钟")
+                        self.diag(f"挂机空转 房间={gv['room']} 已盯{waited}分钟 "
+                                  f"已参与{gv['joined_today']}个")
                     time.sleep(1.5)
                 elif state == "too-long":
-                    time.sleep(2.0)
+                    if last_state_log != "too-long":
+                        last_state_log = "too-long"
+                        self.log(f"发现福袋但倒计时太长（{result.get('left')} 秒），先不参与")
+                    time.sleep(1.5)
                 elif state in ("too-late", "already-handled"):
                     time.sleep(1.0)
                 else:
                     time.sleep(0.8)
+                    if state != "joined":
+                        last_state_log = state
             except Exception as exc:
                 self.diag(f"挂机异常：{exc}")
                 time.sleep(2.0)

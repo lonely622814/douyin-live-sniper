@@ -603,7 +603,9 @@ async function tick(){
         " 个，失败 " + (gv.failed_total||0) + " 次；最近：" + (gv.last_result||"-");
       $("s-giveaway").className = "green";
     }else{
-      $("s-giveaway").textContent = gv.joined_total ? ("已停止 · 共参与 " + gv.joined_total) : "未启动";
+      $("s-giveaway").textContent = gv.joined_total
+        ? ("已停止 · 共参与 " + gv.joined_total)
+        : "未启动 · 点下面按钮开始";
       $("s-giveaway").className = "";
     }
     /* 暂停架枪按钮：状态一目了然 */
