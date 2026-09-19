@@ -295,8 +295,10 @@ class GiveawayBot:
         self.last_action_at = 0.0
         self._comment_times: list[float] = []      # 评论时间戳（全局限流用）
         self._room_comment: dict[str, list[float]] = {}   # 每房间评论时间戳
-        self._seen_bag: set[str] = set()           # 已处理过的福袋（房间+倒计时）避免重复参与
-        self._recent_attempt: dict[str, float] = {}  # 最近尝试过的时间（失败后冷却，别猛点）
+        # 当前这个福袋的状态（换新福袋时重置）。
+        # 注意：**不能拿倒计时当身份**——倒计时每秒都在变，那样每次都会以为是新福袋，
+        # 就会出现"反复开面板又关掉"的鬼畜行为（用户反馈过）。
+        self._bag: dict = {}
         self.follow_log = []                       # 自动关注记录（阶段 4 会落盘）
 
     # ---------- 基础 ----------
@@ -449,6 +451,28 @@ class GiveawayBot:
 
     # ---------- 主循环 ----------
 
+    def _refresh_bag_state(self, info: dict) -> None:
+        """维护"当前这个福袋"的状态：识别到什么算一个新福袋。
+
+        判定规则：**同一个直播间** + 倒计时**没有突然变大**（变大说明换新福袋了）
+          → 同一个福袋；否则算新福袋，重置 handled。
+        """
+        now = time.time()
+        left = parse_countdown(info.get("countdown") or "")
+        st = self._bag
+        same = (
+            st.get("url") == info.get("url")
+            and st.get("left") is not None
+            and left is not None
+            and left <= st["left"] + 30
+        )
+        if same:
+            st["left"] = left
+            st["seen"] = now
+        else:
+            self._bag = {"url": info.get("url"), "left": left, "handled": False,
+                         "seen": now, "next_try": 0.0, "logged_joined": False}
+
     def tick(self) -> dict:
         """跑一轮。返回这一轮的结果，给上层记日志/状态用。"""
         self._roll_day()
@@ -459,21 +483,24 @@ class GiveawayBot:
         self.countdown = info.get("countdown") or "-"
 
         if not info.get("bag"):
-            # 没有福袋：红包留给阶段 3，这里只报告状态
+            # 没有福袋：隔一会儿就把旧状态清掉，等下个福袋从"未处理"开始
+            if self._bag and time.time() - self._bag.get("seen", 0) > 20:
+                self._bag = {}
+            # 红包留给阶段 3，这里只报告状态
             return {"state": "no-bag", "redpacket": bool(info.get("redpacket")),
                     "countdown": info.get("countdown", "")}
+
+        self._refresh_bag_state(info)
+        if self._bag.get("handled"):
+            return {"state": "already-handled"}       # 这个福袋处理过了，不再开面板
+        if time.time() < self._bag.get("next_try", 0):
+            return {"state": "cooldown"}
 
         left = parse_countdown(info.get("countdown") or "")
         if left is not None and left < int(self.cfg.giveaway_min_left_s or 20):
             return {"state": "too-late", "left": left}
         if left is not None and left > int(self.cfg.giveaway_max_left_s or 600):
             return {"state": "too-long", "left": left}
-
-        key = f"{info.get('url','')}|{info.get('countdown','')}"
-        if key in self._seen_bag:
-            return {"state": "already-handled"}
-        if time.time() - self._recent_attempt.get(key, 0.0) < 30:
-            return {"state": "cooldown"}
 
         # 看到福袋立刻出声，别让人以为程序没反应
         if self.last_result != f"发现福袋 {info.get('countdown','')}":
@@ -485,7 +512,7 @@ class GiveawayBot:
         opened = self.open_panel()
         if not opened.get("ok"):
             self.failed_total += 1
-            self._recent_attempt[key] = time.time()
+            self._bag["next_try"] = time.time() + 20      # 20 秒后再试这个福袋
             why = opened.get("why")
             self.log(f"⚠ 福袋面板没打开（{why}）：{self.room_name}"
                      + ("  ← 通常是福袋刚好结束了" if "no-icon" in str(why) else ""))
@@ -497,10 +524,23 @@ class GiveawayBot:
         self.countdown = panel.get("countdown") or self.countdown
         prize = f"{panel.get('prize','')} {panel.get('bags','')}".strip()
 
+        # ★ 已经参与过了（我们自己参与过，或者你手动点过）：
+        #   标记为已处理 + 关面板 + 只记一次日志，绝不再反复开合
+        if panel.get("joined") or any("已" in str(s) for s in (panel.get("condState") or [])):
+            self._bag["handled"] = True
+            self.close_panel()
+            if not self._bag.get("logged_joined"):
+                self._bag["logged_joined"] = True
+                self.last_result = "这个福袋已经参与过"
+                self.log(f"ℹ 这个福袋已经参与过了，跳过（{self.room_name} · "
+                         f"{prize or '未知奖品'} · 倒计时 {panel.get('countdown') or '-'}）")
+                self.diag(f"福袋已参与过，跳过 房间={self.room_name}")
+            return {"state": "already-joined"}
+
         # 花钱类条件：默认拒绝
         cost = self.cost_condition(panel)
         if cost and not self.cfg.giveaway_allow_lamp:
-            self._seen_bag.add(key)
+            self._bag["handled"] = True
             self.close_panel()
             self.last_result = f"跳过（条件要花钱：{cost}）"
             self.log(f"福袋跳过：条件涉及「{cost}」，按设置不参与（{self.room_name}）")
@@ -538,7 +578,7 @@ class GiveawayBot:
         self.timing("福袋参与", cost_ms)
         if not joined.get("ok"):
             self.failed_total += 1
-            self._recent_attempt[key] = time.time()
+            self._bag["next_try"] = time.time() + 20
             self.close_panel()
             self.diag(f"点参与失败：{joined.get('why')}")
             return {"state": "join-failed", "why": joined.get("why")}
@@ -551,7 +591,7 @@ class GiveawayBot:
         verified = bool(after.get("joined") or cond_done or btn_gone or not after.get("open"))
         if not verified:
             self.failed_total += 1
-            self._recent_attempt[key] = time.time()
+            self._bag["next_try"] = time.time() + 20
             self.close_panel()
             self.last_result = "点了但没确认到参与"
             self.log(f"⚠ 福袋点了但没确认到参与（可能没生效）：{self.room_name} · "
@@ -561,8 +601,7 @@ class GiveawayBot:
                       f"条件={after.get('condState')}")
             return {"state": "join-unverified"}
 
-        self._seen_bag.add(key)
-        self._recent_attempt[key] = time.time()
+        self._bag["handled"] = True
         self.joined_total += 1
         self.joined_today += 1
         if self.need_comment(panel):
