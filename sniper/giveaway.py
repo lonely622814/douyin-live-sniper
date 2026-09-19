@@ -216,7 +216,30 @@ JS_JOIN = r"""
 })()
 """
 
-# ── 关面板（点右上角那个 × ，失败就按 ESC） ──
+# ── 关面板：先找真正的"×"；找不到就返回屏幕坐标，由 Python 用真实鼠标点 ──
+JS_CLOSE_TARGET = r"""
+(function () {
+  var root = document.querySelector('#lottery_close_cotainer')
+          || document.querySelector('[id*="lottery_close"]')
+          || document.querySelector('#short_touch_land_lottery_land_userMain');
+  if (!root) return {open: false, ok: false, why: 'already-closed'};
+  function R(e) { var r = e.getBoundingClientRect();
+    return {x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2),
+            w: Math.round(r.width), h: Math.round(r.height)}; }
+  // ① 类名里带 close 的
+  var cand = root.querySelector('[class*="close"],[class*="Close"],[aria-label*="关闭"]');
+  if (cand) { var b = R(cand); if (b.w > 0) return {open: true, ok: true, how: 'close类名', x: b.x, y: b.y}; }
+  // ② 面板里第一个 svg（老版本是 svg 的 × ）
+  var svg = root.querySelector('svg');
+  if (svg) { var b2 = R(svg); if (b2.w > 4) return {open: true, ok: true, how: 'svg', x: b2.x, y: b2.y}; }
+  // ③ 面板右上角那块小方块的坐标（新版没有 svg，× 就在右上角）
+  var r = root.getBoundingClientRect();
+  return {open: true, ok: true, how: '右上角推算', x: Math.round(r.left + r.width - 26),
+          y: Math.round(r.top + 26)};
+})()
+"""
+
+# ── 老实现（点 svg）保留兜底 ──
 JS_CLOSE = r"""
 (function () {
   var root = document.querySelector('#lottery_close_cotainer')
@@ -269,6 +292,12 @@ def parse_countdown(text: str) -> int | None:
     if not match:
         return None
     return int(match.group(1)) * 60 + int(match.group(2))
+
+
+# 开奖结果面板的文案（新版：没抽中福袋 送你一个好运气~ 查看幸运观众 知道了）
+RE_LOSE = r"没抽中|未抽中|没有抽中|未中奖|没有中奖|很遗憾|下次再来"
+RE_WIN = r"恭喜|中奖|获得|抽中"
+RE_RESULT_PANEL = r"没抽中|未抽中|没有抽中|未中奖|很遗憾|恭喜|中奖|幸运观众|知道了|查看幸运"
 
 
 class GiveawayBot:
@@ -401,9 +430,35 @@ class GiveawayBot:
         res = self._evaluate(JS_READ_PANEL)
         return res if isinstance(res, dict) else {"open": False}
 
-    def close_panel(self) -> None:
+    def close_panel(self) -> bool:
+        """把福袋/红包面板关掉（新版面板里没有 svg，必须用真实鼠标点 × ，再不行按 ESC）。
+
+        参考开源项目的做法：**任何弹窗都要能自己关掉**，否则会一直挂在屏幕上。
+        """
+        if not self.read_panel().get("open"):
+            return True
+        target = self._evaluate(JS_CLOSE_TARGET)
+        if isinstance(target, dict) and target.get("open") and target.get("ok"):
+            self._real_click(target["x"], target["y"])
+            time.sleep(0.5)
+            if not self.read_panel().get("open"):
+                return True
+        # 兜底 ①：老的 JS 点 svg
         self._evaluate(JS_CLOSE)
         time.sleep(0.3)
+        if not self.read_panel().get("open"):
+            return True
+        # 兜底 ②：按 ESC（真实按键）
+        if self.session is not None:
+            try:
+                for kind in ("keyDown", "keyUp"):
+                    self.session.call("Input.dispatchKeyEvent",
+                                      {"type": kind, "key": "Escape", "code": "Escape",
+                                       "windowsVirtualKeyCode": 27, "nativeVirtualKeyCode": 27})
+                time.sleep(0.4)
+            except Exception:
+                pass
+        return not self.read_panel().get("open")
 
     # ---------- 规则判定 ----------
 
@@ -473,6 +528,31 @@ class GiveawayBot:
             self._bag = {"url": info.get("url"), "left": left, "handled": False,
                          "seen": now, "next_try": 0.0, "logged_joined": False}
 
+    def _handle_result_panel(self) -> bool:
+        """处理"开奖结果面板"：读出结果 → 记进日志 → 关掉。
+
+        参考开源项目：任何弹窗都要能自己收掉，否则会一直挂在屏幕上挡着。
+        返回 True 表示"刚处理掉一个结果面板"。
+        """
+        panel = self.read_panel()
+        if not panel.get("open"):
+            return False
+        text = panel.get("allText") or ""
+        if not re.search(RE_RESULT_PANEL, text):
+            return False
+        if re.search(RE_LOSE, text):
+            self.log(f"😐 没抽中（{self.room_name}）· {text[:40]}")
+            self._record(f"未中奖|{self.room_name}|{text[:60]}")
+        elif re.search(RE_WIN, text):
+            self.log(f"🎁 中奖了！（{self.room_name}）· {text[:60]}")
+            self._record(f"中奖|{self.room_name}|{text[:60]}")
+        else:
+            self.log(f"ℹ 福袋结果面板，收起（{self.room_name}）")
+        closed = self.close_panel()
+        self.diag(f"结果面板已关闭={'是' if closed else '否'} 内容={text[:50]}")
+        self._bag = {}
+        return True
+
     def tick(self) -> dict:
         """跑一轮。返回这一轮的结果，给上层记日志/状态用。"""
         self._roll_day()
@@ -482,9 +562,31 @@ class GiveawayBot:
         self.room_name = info.get("title") or self.room_name
         self.countdown = info.get("countdown") or "-"
 
+        # ★ 先看有没有"开奖结果面板"挂着（不管现在有没有新福袋，都要先收掉）
+        if self._handle_result_panel():
+            return {"state": "result-closed"}
+
         if not info.get("bag"):
             # 没有福袋：隔一会儿就把旧状态清掉，等下个福袋从"未处理"开始
             if self._bag and time.time() - self._bag.get("seen", 0) > 20:
+                self._bag = {}
+            # ★ 福袋没了（比如开奖了）但面板还挂在那儿 -> 读出结果并关掉
+            panel = self.read_panel()
+            if panel.get("open"):
+                text = panel.get("allText") or ""
+                done_bag = self._bag
+                if done_bag and not done_bag.get("result_logged"):
+                    done_bag["result_logged"] = True
+                    if re.search(r"恭喜|中奖|获得", text):
+                        self.log(f"🎁 中奖了！{self.room_name} · {text[:80]}")
+                        self._record(f"中奖|{self.room_name}|{text[:80]}")
+                    elif re.search(r"未中奖|没有中奖|很遗憾", text):
+                        self.log(f"😐 未中奖：{self.room_name} · {text[:60]}")
+                        self._record(f"未中奖|{self.room_name}|{text[:60]}")
+                    else:
+                        self.log(f"ℹ 福袋已结束，收起面板（{self.room_name}）")
+                closed = self.close_panel()
+                self.diag(f"福袋结束后关面板：{'成功' if closed else '失败'}")
                 self._bag = {}
             # 红包留给阶段 3，这里只报告状态
             return {"state": "no-bag", "redpacket": bool(info.get("redpacket")),
