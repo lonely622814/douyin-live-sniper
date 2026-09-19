@@ -52,7 +52,7 @@
   /* ── 卡片 ── */
   /* 普通块按内容保底（比例分不够就撑住，绝不裁）；日志块可以压到 190px，其余给日志 */
   .box{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
-    padding:10px 14px 11px;display:flex;flex-direction:column;gap:6px;min-width:0;
+    padding:10px 14px 11px;display:flex;flex-direction:column;gap:5px;min-width:0;
     min-height:0;overflow:hidden}
   .logbox{min-height:190px}
   .box.spread{justify-content:space-between}
@@ -116,6 +116,16 @@
   .swrow{display:grid;grid-template-columns:1fr 1fr;gap:9px}
   .swrow.three{grid-template-columns:repeat(3,minmax(0,1fr))}
   @media (max-width:1360px){ .swrow.three{grid-template-columns:1fr 1fr} }
+  /* 挂机相关的按钮组：两列 / 三列，紧凑一些 */
+  .btnrow{display:grid;gap:9px}
+  .btnrow.two{grid-template-columns:1fr 1fr}
+  .btnrow.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .btnrow button{padding:7px 10px;font-size:12.5px;text-align:center}
+  /* 四个开关并排时压扁一点，省出高度给按钮组 */
+  .swrow.four-sw .tog{padding:8px 54px 8px 12px}
+  .swrow.four-sw .tog .sw{top:8px;width:38px;height:21px}
+  .swrow.four-sw .tog .sw::after{width:15px;height:15px}
+  .swrow.four-sw .tog.on .sw::after{left:20px}
 
   /* 分段控件 */
   .seg{display:flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:#0b1119}
@@ -237,18 +247,40 @@
 
     <div class="box">
       <div class="cap">手动操作</div>
-      <div class="swrow three">
+      <div class="swrow four-sw" style="grid-template-columns:repeat(4,minmax(0,1fr))">
         <button class="tog" id="btn-watch">
-          <span class="tx">开播监听<small>关掉就不守候、不判定</small></span>
+          <span class="tx">开播监听<small>不守候、不判定</small></span>
           <span class="sw" id="sw-watch"></span>
         </button>
         <button class="tog" id="btn-autorefresh">
-          <span class="tx">页面刷新兜底<small>关掉只靠页面自己上报</small></span>
+          <span class="tx">刷新兜底<small>靠页面自己上报</small></span>
           <span class="sw" id="sw-autorefresh"></span>
         </button>
         <button class="tog" id="btn-recycle">
-          <span class="tx">自动换标签<small>内存涨了就换新标签</small></span>
+          <span class="tx">自动换标签<small>内存涨了就换</small></span>
           <span class="sw" id="sw-recycle"></span>
+        </button>
+        <button class="tog" id="btn-autocomment">
+          <span class="tx">自动发评论<small>参与福袋时发</small></span>
+          <span class="sw" id="sw-autocomment"></span>
+        </button>
+      </div>
+      <div class="swrow four-sw" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+        <button class="tog" id="btn-lamp">
+          <span class="tx">允许灯牌<small>花钱类条件</small></span>
+          <span class="sw" id="sw-lamp"></span>
+        </button>
+        <button class="tog" id="btn-redpacket">
+          <span class="tx">自动领红包<small>弹出来就领</small></span>
+          <span class="sw" id="sw-redpacket"></span>
+        </button>
+        <button class="tog" id="btn-autofollow">
+          <span class="tx">自动关注<small>并记进名单</small></span>
+          <span class="sw" id="sw-autofollow"></span>
+        </button>
+        <button class="tog" id="btn-engage">
+          <span class="tx">养号刷评论<small>装得像真人</small></span>
+          <span class="sw" id="sw-engage"></span>
         </button>
       </div>
       <div class="seg" id="seg-refresh">
@@ -263,10 +295,19 @@
         <label class="cb" style="justify-content:flex-end">
           <input type="checkbox" id="refresh_wait_load"> 等页面加载完再计时</label>
       </div>
-      <div class="hr"></div>
-      <button class="act p1" id="btn-prepare">打开直播间并准备好<em>开面板 + 进陪伴之旅，架好枪</em></button>
-      <button class="act p2" id="btn-send">立即送出为你闪耀<em>真花钱 · 9 钻 · 不可撤销</em></button>
-      <button class="act" id="btn-refresh">刷新今天的点亮状态<em>只看一眼 · 不花钱</em></button>
+      <div class="btnrow two">
+        <button class="p1" id="btn-prepare">架枪（打开并准备好）</button>
+        <button id="btn-armpause">暂停架枪 · 完全停手</button>
+      </div>
+      <div class="btnrow two">
+        <button class="p1" id="btn-giveaway">挂机抢福袋 / 红包</button>
+        <button id="btn-giveaway-stop">停止挂机</button>
+      </div>
+      <div class="btnrow three">
+        <button id="btn-send" class="p2">立即送出（9钻）</button>
+        <button id="btn-refresh">刷新点亮状态</button>
+        <button id="btn-openlogs2" class="mini">看日志</button>
+      </div>
     </div>
 
     <div class="box">
@@ -302,6 +343,7 @@
         <div class="stat"><span>首发监听</span><b id="s-gift">-</b></div>
         <div class="stat"><span>已查询</span><b id="s-ticks">-</b></div>
         <div class="stat"><span>最近刷新</span><b id="s-reload">-</b></div>
+        <div class="stat"><span>挂机抢福袋</span><b id="s-giveaway">未启动</b></div>
       </div>
       <div class="hr"></div>
       <div class="sect">每一步花了多少毫秒</div>
@@ -328,6 +370,7 @@
 const $ = id => document.getElementById(id);
 const ORDER = ["打开并准备","开面板","进陪伴之旅","刷新今日状态","点击送出","确认弹窗","校验结果"];
 let cfg = {};
+let lastStatus = {};          /* 最近一次的 /api/status，用来做按钮状态切换 */
 const post = async (p,b) => (await fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)})).json();
 
 async function loadCfg(){
@@ -424,6 +467,11 @@ function paint(){
   s("btn-watch",cfg.watch_enabled!==false);
   s("btn-autorefresh",cfg.refresh_enabled!==false);
   s("btn-recycle",cfg.auto_recycle!==false);
+  s("btn-autocomment",cfg.giveaway_auto_comment!==false);
+  s("btn-lamp",cfg.giveaway_allow_lamp===true);
+  s("btn-redpacket",cfg.redpacket_auto!==false);
+  s("btn-autofollow",cfg.follow_auto!==false);
+  s("btn-engage",cfg.engage_enabled!==false);
 }
 async function tog(f,a){
   if(a){const r=await post("/api/action",{action:a}); if(r.ok)cfg[f]=!cfg[f];}
@@ -436,6 +484,11 @@ $("btn-dryrun").onclick=()=>tog("dry_run");
 $("btn-watch").onclick=()=>tog("watch_enabled");
 $("btn-autorefresh").onclick=()=>tog("refresh_enabled");
 $("btn-recycle").onclick=()=>tog("auto_recycle");
+$("btn-autocomment").onclick=()=>tog("giveaway_auto_comment");
+$("btn-lamp").onclick=()=>tog("giveaway_allow_lamp");
+$("btn-redpacket").onclick=()=>tog("redpacket_auto");
+$("btn-autofollow").onclick=()=>tog("follow_auto");
+$("btn-engage").onclick=()=>tog("engage_enabled");
 
 async function save(){
   cfg.room_url=$("room_url").value.trim();
@@ -466,6 +519,15 @@ $("btn-refresh").onclick=()=>act("btn-refresh","refresh_accompany");
 $("btn-cal").onclick=()=>act("btn-cal","calibrate");
 $("btn-test").onclick=()=>act("btn-test","dry_run_test");
 $("btn-openlogs").onclick=()=>act("btn-openlogs","open_logs");
+$("btn-openlogs2").onclick=()=>act("btn-openlogs2","open_logs");
+
+/* 挂机抢福袋 / 暂停架枪 */
+$("btn-giveaway").onclick=()=>act("btn-giveaway","start_giveaway");
+$("btn-giveaway-stop").onclick=()=>act("btn-giveaway-stop","stop_giveaway");
+$("btn-armpause").onclick=()=>{
+  const paused = (lastStatus||{}).armed_paused === true;
+  act("btn-armpause", paused ? "resume_arm" : "pause_arm");
+};
 $("btn-send").onclick=()=>{
   if(!confirm("确认现在送出「为你闪耀」？\n\n真的花 9 钻，不可撤销。"))return;
   act("btn-send","send_now");
@@ -489,6 +551,7 @@ function times(t){
 async function tick(){
   try{
     const s=await (await fetch("/api/status")).json();
+    lastStatus = s;
     const beat=s.heartbeat_age, alive=!!s.monitor&&beat!=null&&beat<15;
     const watching = s.watch_enabled!==false;
     $("led").className="led"+(alive&&watching?" on":"");
@@ -527,6 +590,27 @@ async function tick(){
     $("s-beat").textContent=beat==null?"-":(beat.toFixed(1)+" 秒前");
     $("s-gift").textContent=s.first_gift||"还没有人送出";
     $("s-ticks").textContent=(s.monitor_ticks||0)+" 次";
+    /* ── 挂机抢福袋状态 ── */
+    const gv = s.giveaway || {};
+    if(s.giveaway_on){
+      const parts = [];
+      if(gv.room && gv.room !== "-") parts.push(gv.room.slice(0, 10));
+      if(gv.countdown && gv.countdown !== "-") parts.push("福袋 " + gv.countdown);
+      if(gv.people && gv.people !== "-") parts.push(gv.people.replace("人已参加", "人"));
+      parts.push("已参与 " + (gv.joined_today||0));
+      $("s-giveaway").textContent = "运行中 · " + parts.join(" · ");
+      $("s-giveaway").title = "总计参与 " + (gv.joined_total||0) + " 个，今日 " + (gv.joined_today||0) +
+        " 个，失败 " + (gv.failed_total||0) + " 次；最近：" + (gv.last_result||"-");
+      $("s-giveaway").className = "green";
+    }else{
+      $("s-giveaway").textContent = gv.joined_total ? ("已停止 · 共参与 " + gv.joined_total) : "未启动";
+      $("s-giveaway").className = "";
+    }
+    /* 暂停架枪按钮：状态一目了然 */
+    $("btn-armpause").textContent = s.armed_paused ? "恢复架枪" : "暂停架枪 · 完全停手";
+    $("btn-armpause").className = s.armed_paused ? "p1" : "";
+    /* 开关状态跟着后端同步 */
+    if(s.giveaway!==undefined && s.giveaway_on!==undefined){ /* 状态由上面处理 */ }
     /* 当前实际用哪个浏览器（状态里带 browser_label / browser_kind） */
     if(s.browser_kind){
       const label = s.browser_label || s.browser_kind;

@@ -27,7 +27,7 @@ import time
 import webbrowser
 from datetime import datetime, timedelta, timezone
 
-from . import browser, config, panel, timebase, webflow
+from . import browser, config, giveaway as giveaway_mod, panel, timebase, webflow
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BEIJING = timezone(timedelta(hours=8))
@@ -78,6 +78,12 @@ class Controller:
         self.page_title = "-"
         self.page_heap_mb: float | None = None
         self.watch_on = bool(cfg.watch_enabled)
+        # ── 挂机抢福袋 / 红包 ──
+        self.giveaway = giveaway_mod.GiveawayBot(
+            self.flow, cfg, self.log, self.diag, self.timing
+        )
+        self.giveaway_on = bool(cfg.giveaway_enabled)
+        self.armed_paused = False      # 【暂停架枪·完全停手】
         self.diag(
             f"===== 启动 ===== 房间={cfg.room_url or '(未设置)'} "
             f"刷新间隔={cfg.refresh_interval:g}s 刷新方式={'强制' if cfg.refresh_mode == 'hard' else '普通'} "
@@ -262,6 +268,9 @@ class Controller:
             "challenge": self.page_challenge,
             "page_title": self.page_title,
             "page_heap_mb": self.page_heap_mb,
+            "giveaway_on": self.giveaway_on,
+            "giveaway": self.giveaway.summary(),
+            "armed_paused": self.armed_paused,
             "logs": list(self.logs)[-60:],
         }
 
@@ -871,6 +880,45 @@ class Controller:
         except Exception:
             pass
 
+    def giveaway_watcher(self) -> None:
+        """挂机抢福袋 / 红包的主循环。
+
+        让路规则（阶段 1 做最小版，阶段 5 补完整）：
+        * "已架好枪 / 正在切直播间 / 手动暂停"时完全不动作；
+        * 离预定时间不足 2 分钟就自动停手，把页面让给首发流程。
+        """
+        while not self._stop.is_set():
+            try:
+                if not (self.giveaway_on and self.cfg.giveaway_enabled):
+                    time.sleep(0.5)
+                    continue
+                if self.armed_paused or self.armed or self._switching:
+                    time.sleep(1.0)
+                    continue
+                left = self._seconds_to_next_trigger()
+                if left is not None and left < 120:
+                    if not getattr(self, "_giveaway_yield_logged", False):
+                        self._giveaway_yield_logged = True
+                        self.log("距预定时间不足 2 分钟：挂机暂停，准备架枪")
+                        self.diag("挂机让路：距下次定时不到 120 秒")
+                    time.sleep(2.0)
+                    continue
+                self._giveaway_yield_logged = False
+
+                result = self.giveaway.tick()
+                state = (result or {}).get("state", "")
+                if state == "no-bag":
+                    time.sleep(1.5)
+                elif state == "too-long":
+                    time.sleep(2.0)
+                elif state in ("too-late", "already-handled"):
+                    time.sleep(1.0)
+                else:
+                    time.sleep(0.8)
+            except Exception as exc:
+                self.diag(f"挂机异常：{exc}")
+                time.sleep(2.0)
+
     def arm_if_needed(self) -> None:
         """主播在播时提前把陪伴之旅架好，省掉开播瞬间进房的那一两秒。"""
         if not self.cfg.trigger_live_start or self.armed:
@@ -1093,7 +1141,35 @@ class Controller:
                 self.cfg.update({"rooms": rooms[:30]})
                 self.log(f"已保存直播间到历史：{note or url}")
                 return {"ok": True, "note": f"已保存（共 {len(rooms[:30])} 个）"}
-            if name == "open_logs":
+            if name == "start_giveaway":
+                self.giveaway_on = True
+                self.cfg.update({"giveaway_enabled": True})
+                self._giveaway_yield_logged = False
+                self.log("挂机抢福袋：已启动（先盯当前直播间，后续按房间列表轮换）")
+                self.diag("挂机启动")
+                return {"ok": True, "note": "已启动"}
+            if name == "stop_giveaway":
+                self.giveaway_on = False
+                self.cfg.update({"giveaway_enabled": False})
+                self.log("挂机抢福袋：已停止")
+                self.diag("挂机停止")
+                return {"ok": True, "note": "已停止"}
+            if name == "pause_arm":
+                # 完全停手：不刷新、不检测、不自动出手（页面保持原样）
+                self.armed_paused = True
+                self.log("已暂停架枪（完全停手，页面保持不动；点【恢复】继续）")
+                self.diag("架枪暂停")
+                return {"ok": True, "note": "已暂停"}
+            if name == "resume_arm":
+                self.armed_paused = False
+                self.log("已恢复架枪，继续守候")
+                self.diag("架枪恢复")
+                return {"ok": True, "note": "已恢复"}
+            if name == "giveaway_now":
+                if not self.giveaway_on:
+                    return {"ok": False, "note": "先点【挂机抢福袋】启动"}
+                result = self.giveaway.tick()
+                return {"ok": True, "note": f"跑了一轮：{result.get('state')}"}
                 # 打开诊断日志文件夹，出问题时直接把里面的文件发出来
                 path = self.diag_dir()
                 try:
@@ -1265,6 +1341,7 @@ def main(argv=None) -> int:
     # 监听线程**始终**启动：界面上的"正在监听"和主播状态都靠它。
     # 是否真的在开播瞬间抢，由「主播一开播就秒抢」开关决定。
     threading.Thread(target=controller.live_watcher, daemon=True, name="live-watch").start()
+    threading.Thread(target=controller.giveaway_watcher, daemon=True, name="giveaway").start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

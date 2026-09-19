@@ -20,6 +20,24 @@ class Config:
     auto_recycle: bool = True  # 自动换标签（内存整理）：页面堆太大时换新标签重建渲染进程
     # 用哪个浏览器打开直播间：auto=自动（先 Chrome 后 Edge）/ chrome / edge / exe 完整路径
     browser: str = "auto"
+
+    # ── 挂机抢福袋 / 红包（网页版，阶段 1）──
+    giveaway_enabled: bool = False        # 挂机总开关（默认关，你在控制台手动开）
+    giveaway_rooms: list = field(default_factory=list)   # 房间列表（阶段 2 会用自动抓取补充）
+    rooms_auto: bool = True               # 自动抓房间列表（关注页 + 直播首页）
+    giveaway_auto_comment: bool = True    # 允许自动发评论（=点"一键发评论参与福袋"）
+    giveaway_allow_lamp: bool = False     # 是否允许"灯牌/粉丝团/送礼物"这类花钱条件的福袋
+    follow_auto: bool = True              # 条件要关注主播时自动关注（并记进名单）
+    redpacket_auto: bool = True           # 自动领红包（阶段 3）
+    engage_enabled: bool = True           # 养号：在直播间定时刷评论（阶段 4）
+    giveaway_min_left_s: int = 20         # 倒计时少于这么多秒就不参与（来不及）
+    giveaway_max_left_s: int = 600        # 倒计时多于这么多秒就换下一个房间（不干等）
+    giveaway_room_hold_s: int = 180       # 一个房间最多待多久没福袋就换
+    giveaway_comment_per_room_hour: int = 3    # 每个房间每小时最多发几条评论
+    giveaway_comment_per_hour: int = 20        # 全局每小时最多发几条评论
+    giveaway_daily_limit: int = 200       # 每天最多参与多少个福袋
+    rest_periods: list = field(default_factory=list)   # 不挂机时段，如 ["03:00-07:00"]
+    room_blacklist: list = field(default_factory=list)  # 不去的房间/主播
     trigger_midnight: bool = True  # 每天 00:00:00.000 的第一个为你闪耀
     trigger_live_start: bool = False  # 主播一开播就秒抢
     send_times_raw: str = ""  # 自定义发送时间，逗号分隔，如 "14:00:00,20:30"
