@@ -36,6 +36,12 @@ class Config:
     giveaway_comment_per_room_hour: int = 3    # 每个房间每小时最多发几条评论
     giveaway_comment_per_hour: int = 20        # 全局每小时最多发几条评论
     giveaway_daily_limit: int = 200       # 每天最多参与多少个福袋
+    # 奖品筛选（照抄原项目 contains_want / contains_not_want，"不想要"优先）
+    giveaway_want_keywords: list = field(default_factory=list)
+    giveaway_skip_keywords: list = field(default_factory=list)
+    # 参与成功后随机静默多久（拟人化，照抄原项目 random_delay(180,420)）
+    giveaway_post_join_wait_min: int = 0
+    giveaway_post_join_wait_max: int = 0
     rest_periods: list = field(default_factory=list)   # 不挂机时段，如 ["03:00-07:00"]
     room_blacklist: list = field(default_factory=list)  # 不去的房间/主播
     trigger_midnight: bool = True  # 每天 00:00:00.000 的第一个为你闪耀

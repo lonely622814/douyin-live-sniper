@@ -809,6 +809,34 @@ class Controller:
             return None
         return (targets[0][0] - self.tb.now_ns()) / 1e9
 
+    def in_rest_period(self) -> bool:
+        """现在是不是"不挂机时段"（配置 rest_periods，如 ["03:00-07:00"]，支持跨天）。"""
+        periods = self.cfg.rest_periods or []
+        if not periods:
+            return False
+        now = time.localtime()
+        minutes = now.tm_hour * 60 + now.tm_min
+
+        def parse(text: str) -> tuple[int, int] | None:
+            match = re.match(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$", text or "")
+            if not match:
+                return None
+            return (int(match.group(1)) * 60 + int(match.group(2)),
+                    int(match.group(3)) * 60 + int(match.group(4)))
+
+        for item in periods:
+            span = parse(str(item))
+            if not span:
+                continue
+            start, end = span
+            if start <= end:
+                if start <= minutes < end:
+                    return True
+            else:                                  # 跨天，例如 23:30-07:00
+                if minutes >= start or minutes < end:
+                    return True
+        return False
+
     def maybe_recycle_tab(self) -> None:
         """内存整理：条件合适时换掉整个标签页，把渲染进程连同内存一起重建。
 
@@ -915,6 +943,16 @@ class Controller:
                 if self.armed or getattr(self, "_switching", False):
                     time.sleep(1.0)
                     continue
+                # 不挂机时段（配置 rest_periods，如 03:00-07:00）—— 到点自动休息
+                if self.in_rest_period():
+                    if not getattr(self, "_rest_logged", False):
+                        self._rest_logged = True
+                        self.log(f"现在是不挂机时段（{','.join(map(str, self.cfg.rest_periods or []))}），"
+                                 f"挂机暂停，到时间自动继续")
+                        self.diag("进入不挂机时段")
+                    time.sleep(30)
+                    continue
+                self._rest_logged = False
                 left = self._seconds_to_next_trigger()
                 if left is not None and left < 120:
                     if not getattr(self, "_giveaway_yield_logged", False):

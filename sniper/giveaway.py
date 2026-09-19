@@ -285,6 +285,33 @@ JS_FOLLOW = r"""
 })()
 """
 
+# ── 找"领取/领奖"按钮的坐标（中奖后用） ──
+JS_CLAIM_CENTER = r"""
+(function () {
+  var root = document.querySelector('#lottery_close_cotainer')
+          || document.querySelector('#short_touch_land_lottery_land_userMain')
+          || document.body;
+  var cand = null;
+  [].slice.call(root.querySelectorAll('div,button,span,[role="button"]')).forEach(function (e) {
+    if (cand) return;
+    var t = (e.innerText || '').trim(), r = e.getBoundingClientRect();
+    if (t && t.length <= 12 && r.width >= 60 && r.height >= 26 &&
+        /领取|领奖|去看看|立即查看|查看奖品|点击领取/.test(t)) cand = e;
+  });
+  if (!cand) return {ok: false};
+  var r = cand.getBoundingClientRect();
+  return {ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2),
+          text: (cand.innerText || '').trim().slice(0, 20)};
+})()
+"""
+
+# ── 读整页文字（只在"中奖"这种少见情况用，判断后面是不是要填地址/下单） ──
+JS_PAGE_TEXT = r"""
+(function () {
+  return (document.body ? (document.body.innerText || '') : '').replace(/\s+/g, ' ').slice(0, 400);
+})()
+"""
+
 
 def parse_countdown(text: str) -> int | None:
     """把 09:15 这样的倒计时转成秒；读不到就返回 None。"""
@@ -298,6 +325,14 @@ def parse_countdown(text: str) -> int | None:
 RE_LOSE = r"没抽中|未抽中|没有抽中|未中奖|没有中奖|很遗憾|下次再来"
 RE_WIN = r"恭喜|中奖|获得|抽中"
 RE_RESULT_PANEL = r"没抽中|未抽中|没有抽中|未中奖|很遗憾|恭喜|中奖|幸运观众|知道了|查看幸运"
+
+# 参与按钮文案分类（照抄原项目 attend_choujiang 的三类判定）
+BTN_SPEND = ("加入粉丝团", "开通店铺会员", "开通会员", "钻石", "送灯牌", "送礼物", "付费", "购买")
+BTN_DONE = ("参与成功", "还需看播", "已参与", "等待开奖", "已达成", "已领取", "已提交")
+BTN_FAIL = ("无法参与", "时长不足", "不满足", "活动已结束", "已结束", "已过期", "已下架")
+BTN_JOIN = ("评论", "参与抽奖", "参与", "一键", "开始观看", "去看看", "立即参与", "立即领取")
+# 中奖后需要点"领取"；但下面这些页面出现就该停手让人工处理（原项目会自动下单，我们不自动下单）
+RE_NEED_MANUAL = r"收货地址|填写地址|确认订单|立即支付|支付|身份信息|实名"
 
 
 class GiveawayBot:
@@ -329,6 +364,8 @@ class GiveawayBot:
         # 就会出现"反复开面板又关掉"的鬼畜行为（用户反馈过）。
         self._bag: dict = {}
         self.follow_log = []                       # 自动关注记录（阶段 4 会落盘）
+        self.need_manual = False                   # 需要人工介入（中奖领奖要填地址等）
+        self._next_action_at = 0.0                 # 参与后随机静默到什么时候
 
     # ---------- 基础 ----------
 
@@ -462,6 +499,49 @@ class GiveawayBot:
 
     # ---------- 规则判定 ----------
 
+    @staticmethod
+    def judge_button(text: str) -> str:
+        """按钮文案分类：spend(要花钱) / done(已完成) / fail(做不了) / join(可参与) / ''(不认识)。
+
+        照抄原项目 attend_choujiang 的三类判定（它把"加入粉丝团+钻石""开通店铺会员"直接跳过，
+        "开始观看"这种要再点一次的也算可参与）。
+        """
+        t = (text or "").strip()
+        if not t:
+            return ""
+        for kw in BTN_SPEND:
+            if kw in t:
+                return "spend"
+        for kw in BTN_DONE:
+            if kw in t:
+                return "done"
+        for kw in BTN_FAIL:
+            if kw in t:
+                return "fail"
+        for kw in BTN_JOIN:
+            if kw in t:
+                return "join"
+        return ""
+
+    def prize_skip(self, panel: dict) -> str:
+        """奖品筛选（照抄原项目 check_contain）：返回命中的"不想要"关键词，或空字符串。
+
+        * "不想要"优先判定；
+        * 凌晨 1–7 点不做筛选（原项目：半夜不对福袋内容做要求）。
+        """
+        hour = time.localtime().tm_hour
+        if 1 <= hour <= 7:
+            return ""
+        text = " ".join([panel.get("prize") or "", panel.get("bags") or "",
+                         panel.get("allText") or ""])
+        want = [k for k in (self.cfg.giveaway_want_keywords or []) if k and k in text]
+        if want:
+            return ""            # 明确想要 -> 不跳过
+        for kw in (self.cfg.giveaway_skip_keywords or []):
+            if kw and kw in text:
+                return kw
+        return ""
+
     def cost_condition(self, panel: dict) -> str:
         """面板里有没有"花钱"类条件（灯牌/粉丝团/送礼物/钻石）。返回命中的那句。"""
         text = " ".join(panel.get("conditions") or []) + " " + (panel.get("allText") or "")
@@ -547,6 +627,8 @@ class GiveawayBot:
         elif re.search(RE_WIN, text):
             self.log(f"🎁 中奖了！（{self.room_name}）· {text[:60]}")
             self._record(f"中奖|{self.room_name}|{text[:60]}")
+            self._save_reward_shot()          # 截图留证（原项目 save_reward_pic）
+            self._try_claim()                 # 点"领取"；要填地址/下单就停手交给你
         else:
             self.log(f"ℹ 福袋结果面板，收起（{self.room_name}）")
         closed = self.close_panel()
@@ -554,9 +636,55 @@ class GiveawayBot:
         self._bag = {}
         return True
 
+    def _save_reward_shot(self) -> None:
+        """中奖截图留证，存到 logs/中奖截图_<时间>.png（原项目的 save_reward_pic）。"""
+        try:
+            import base64
+            import pathlib
+
+            if self.session is None:
+                return
+            data = self.session.call("Page.captureScreenshot", {"format": "png"}, timeout=15)
+            raw = base64.b64decode(data.get("data") or "")
+            if not raw:
+                return
+            root = pathlib.Path(__file__).resolve().parent.parent
+            out_dir = root / "logs"
+            out_dir.mkdir(exist_ok=True)
+            path = out_dir / f"中奖截图_{time.strftime('%Y%m%d_%H%M%S')}.png"
+            path.write_bytes(raw)
+            self.log(f"📸 中奖截图已保存：{path.name}")
+            self.diag(f"中奖截图 {path.name}（{len(raw)//1024} KB）")
+        except Exception as exc:
+            self.diag(f"中奖截图失败：{exc}")
+
+    def _try_claim(self) -> None:
+        """点一次"领取"。原项目会自动下单，我们把风险砍掉：
+        只点"领取/领奖"；一旦后面是要填地址/下单/支付的页面，就停手提醒用户。
+        """
+        target = self._evaluate(JS_CLAIM_CENTER)
+        if not (isinstance(target, dict) and target.get("ok")):
+            self.log("⚠ 中奖了但没找到「领取」按钮，请自己到直播间点一下领奖")
+            self.diag("中奖后找不到领取按钮")
+            return
+        self._real_click(target["x"], target["y"])
+        self.log(f"🎁 已点「{target.get('text')}」尝试领奖")
+        time.sleep(2.5)
+        page = self._evaluate(JS_PAGE_TEXT) or ""
+        if re.search(RE_NEED_MANUAL, page):
+            self.need_manual = True
+            self.log("⚠ 领奖需要填地址/下单/支付：**我不自动操作**，请你自己在浏览器里完成"
+                     "（截图和记录都已留好）")
+            self.diag(f"领奖需人工：{str(page)[:80]}")
+        else:
+            self.log("🎁 领奖流程已点完（若还有后续页面请留意窗口）")
+            self.diag("领奖已点击")
+
     def tick(self) -> dict:
         """跑一轮。返回这一轮的结果，给上层记日志/状态用。"""
         self._roll_day()
+        if time.time() < self._next_action_at:      # 参与后的随机静默（拟人化）
+            return {"state": "post-join-wait"}
         info = self.find()
         if not info:
             return {"state": "no-page"}
@@ -626,10 +754,12 @@ class GiveawayBot:
         self.people = panel.get("people") or "-"
         self.countdown = panel.get("countdown") or self.countdown
         prize = f"{panel.get('prize','')} {panel.get('bags','')}".strip()
+        btn_kind = self.judge_button(panel.get("button") or "")
 
         # ★ 已经参与过了（我们自己参与过，或者你手动点过）：
         #   标记为已处理 + 关面板 + 只记一次日志，绝不再反复开合
-        if panel.get("joined") or any("已" in str(s) for s in (panel.get("condState") or [])):
+        if (panel.get("joined") or btn_kind == "done"
+                or any("已" in str(s) for s in (panel.get("condState") or []))):
             self._bag["handled"] = True
             self.close_panel()
             if not self._bag.get("logged_joined"):
@@ -640,11 +770,31 @@ class GiveawayBot:
                 self.diag(f"福袋已参与过，跳过 房间={self.room_name}")
             return {"state": "already-joined"}
 
-        # 花钱类条件：默认拒绝
-        cost = self.cost_condition(panel)
-        if cost and not self.cfg.giveaway_allow_lamp:
+        # 条件不满足 / 活动已结束（原项目：无法参与、时长不足、不满足参与条件、活动已结束）
+        if btn_kind == "fail":
             self._bag["handled"] = True
             self.close_panel()
+            self.last_result = f"跳过（{panel.get('button')}）"
+            self.log(f"福袋跳过：按钮显示「{panel.get('button')}」（{self.room_name}）")
+            self.diag(f"福袋跳过 按钮={panel.get('button')} 房间={self.room_name}")
+            return {"state": "skip-unavailable", "button": panel.get("button")}
+
+        # 奖品不想要（原项目 contains_not_want，且"不想要"优先）
+        skip_kw = self.prize_skip(panel)
+        if skip_kw:
+            self._bag["handled"] = True
+            self.close_panel()
+            self.last_result = f"跳过（奖品含「{skip_kw}」）"
+            self.log(f"福袋跳过：奖品里含「{skip_kw}」，按你的筛选不参与（{self.room_name} · {prize}）")
+            self.diag(f"福袋跳过 奖品关键词={skip_kw} 房间={self.room_name} 奖品={prize}")
+            return {"state": "skip-prize", "keyword": skip_kw}
+
+        # 花钱类条件：默认拒绝（原项目：加入粉丝团+钻石 / 开通店铺会员 / 加入粉丝团（1钻石））
+        cost = self.cost_condition(panel)
+        if (cost or btn_kind == "spend") and not self.cfg.giveaway_allow_lamp:
+            self._bag["handled"] = True
+            self.close_panel()
+            cost = cost or (panel.get("button") or "要花钱")
             self.last_result = f"跳过（条件要花钱：{cost}）"
             self.log(f"福袋跳过：条件涉及「{cost}」，按设置不参与（{self.room_name}）")
             self.diag(f"福袋跳过 花钱条件={cost} 房间={self.room_name} 奖品={prize}")
@@ -686,11 +836,24 @@ class GiveawayBot:
             self.diag(f"点参与失败：{joined.get('why')}")
             return {"state": "join-failed", "why": joined.get("why")}
 
+        # ★ 二次点击（照抄原项目）：点完可能变成"开始观看"这类还要再点一次的状态
+        time.sleep(0.8)
+        again = self.read_panel()
+        if again.get("open"):
+            kind2 = self.judge_button(again.get("button") or "")
+            if kind2 == "join":
+                second = self.join()
+                if second.get("ok"):
+                    self.log(f"福袋需要二次点击（{again.get('button')}），已补点一次")
+                    self.diag(f"福袋二次点击 按钮={again.get('button')}")
+                    time.sleep(0.8)
+
         # ★ 关键：点完必须回头确认，不能"点了就算成功"（否则会骗人）
         time.sleep(1.5)
         after = self.read_panel()
+        kind3 = self.judge_button(after.get("button") or "")
         cond_done = any("已" in str(s) for s in (after.get("condState") or []))
-        btn_gone = "参与" not in (after.get("button") or "参与")
+        btn_gone = ("参与" not in (after.get("button") or "参与")) or kind3 in ("done", "fail")
         verified = bool(after.get("joined") or cond_done or btn_gone or not after.get("open"))
         if not verified:
             self.failed_total += 1
@@ -718,6 +881,14 @@ class GiveawayBot:
                   f"按钮={joined.get('text')} 今日第 {self.joined_today} 个")
         self._record(f"参与成功|{self.room_name}|{prize}|{panel.get('countdown','')}|"
                      f"{joined.get('text','')}")
+
+        # 参与成功后随机静默一会儿（照抄原项目 random_delay(180,420)，默认关闭）
+        lo = int(self.cfg.giveaway_post_join_wait_min or 0)
+        hi = int(self.cfg.giveaway_post_join_wait_max or 0)
+        if hi > 0 and hi >= lo:
+            wait = random.randint(lo, hi)
+            self._next_action_at = time.time() + wait
+            self.log(f"按设置随机静默 {wait} 秒（拟人化，期间不动作）")
 
         time.sleep(1.5)
         self.close_panel()

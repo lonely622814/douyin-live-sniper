@@ -28,5 +28,15 @@
   "dry_run": true,
   "keep_foreground": true,
   "cdp_port": 9333,
-  "panel_port": 8777
+  "panel_port": 8777,
+  "giveaway_want_keywords": [],
+  "giveaway_skip_keywords": [
+    "店铺红包",
+    "钻石"
+  ],
+  "giveaway_post_join_wait_min": 0,
+  "giveaway_post_join_wait_max": 0,
+  "rest_periods": [
+    "03:00-07:00"
+  ]
 }
