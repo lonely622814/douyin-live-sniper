@@ -31,6 +31,8 @@ import random
 import re
 import time
 
+from . import rooms as rooms_mod
+
 PANEL_SEL = ("#short_touch_land_lottery_land_userMain, #lottery_close_cotainer, "
              "[id*='lottery_close'], [id*='lottery'][class]")
 
@@ -68,12 +70,14 @@ JS_FIND = r"""
   var cd = '';
   if (bag) cd = (bag.innerText || (bag.parentElement || {}).innerText || '').trim();
   var rpText = rp ? (rp.innerText || '').trim() : '';
+  var body = document.body ? (document.body.innerText || '') : '';
   return {
     bag: !!bag, bagBox: box(bag),
     redpacket: !!rp, rpBox: box(rp), rpText: rpText.slice(0, 60),
     countdown: /^\d{1,2}:\d{2}$/.test(cd) ? cd : '',
     title: (document.title || '').slice(0, 40),
-    url: location.href.slice(0, 90)
+    url: location.href.slice(0, 90),
+    offline: /暂未开播|未开播|已下播|直播已结束/.test(body)
   };
 })()
 """
@@ -366,6 +370,13 @@ class GiveawayBot:
         self.follow_log = []                       # 自动关注记录（阶段 4 会落盘）
         self.need_manual = False                   # 需要人工介入（中奖领奖要填地址等）
         self._next_action_at = 0.0                 # 参与后随机静默到什么时候
+        # ── 多房间轮换（阶段 2）──
+        self.room_queue: list[str] = []
+        self.room_pos = 0
+        self.rooms_loaded_at = 0.0
+        self.room_enter_at = time.time()
+        self.room_no_bag_since = time.time()
+        self.rotations = 0
 
     # ---------- 基础 ----------
 
@@ -636,6 +647,59 @@ class GiveawayBot:
         self._bag = {}
         return True
 
+    # ---------- 多房间轮换（阶段 2） ----------
+
+    def load_room_queue(self, force: bool = False) -> int:
+        """准备轮换用的房间列表。
+
+        优先自动抓（关注页 + 直播首页，用后台标签页抓，不动当前房间）；
+        抓不到就用配置里手动填的列表。每 10 分钟重新抓一次。
+        """
+        now = time.time()
+        if not force and self.room_queue and now - self.rooms_loaded_at < 600:
+            return len(self.room_queue)
+        rooms: list[str] = []
+        if getattr(self.cfg, "rooms_auto", True) and self.flow is not None:
+            try:
+                rooms = rooms_mod.scrape_rooms(self.flow.port)
+            except Exception as exc:
+                self.diag(f"抓房间列表失败：{str(exc)[:60]}")
+        if not rooms:
+            rooms = list(self.cfg.giveaway_rooms or [])
+        # 黑名单 + 排除"目标直播间"（那个房间要留给架枪/首发用）
+        rooms = rooms_mod.filter_rooms(rooms, self.cfg.room_blacklist or [],
+                                       [self.cfg.room_url] if self.cfg.room_url else [])
+        self.room_queue = rooms
+        self.rooms_loaded_at = now
+        if rooms:
+            self.diag(f"房间列表就绪：{len(rooms)} 个（{rooms[0]} …）")
+        return len(rooms)
+
+    def rotate_room(self, reason: str) -> dict:
+        """换到下一个直播间（原项目 handle_switch_live_room / handle_wait_time 的网页版）。"""
+        if not self.load_room_queue():
+            return {"state": "no-rooms", "why": "没有可用的房间列表"}
+        self.room_pos = (self.room_pos + 1) % len(self.room_queue)
+        url = self.room_queue[self.room_pos]
+        self.rotations += 1
+        self.log(f"🔁 换直播间（{reason}）→ 第 {self.room_pos + 1}/{len(self.room_queue)} 个：{url}")
+        self.diag(f"换直播间 原因={reason} 第{self.room_pos + 1}/{len(self.room_queue)} {url}")
+        try:
+            session = self.flow.attach()
+            session.navigate(url)
+        except Exception as exc:
+            self.diag(f"换直播间导航失败：{str(exc)[:60]}")
+            return {"state": "rotate-failed", "why": str(exc)[:60]}
+        time.sleep(6)                      # 等新房间把页面渲染出来
+        self._bag = {}
+        self._next_action_at = 0.0
+        self.room_enter_at = time.time()
+        self.room_no_bag_since = time.time()
+        self.room_name = "-"
+        self.countdown = "-"
+        return {"state": "rotated", "url": url,
+                "pos": self.room_pos + 1, "total": len(self.room_queue)}
+
     def _save_reward_shot(self) -> None:
         """中奖截图留证，存到 logs/中奖截图_<时间>.png（原项目的 save_reward_pic）。"""
         try:
@@ -717,11 +781,19 @@ class GiveawayBot:
                 closed = self.close_panel()
                 self.diag(f"福袋结束后关面板：{'成功' if closed else '失败'}")
                 self._bag = {}
+            # ★ 多房间轮换：直播间结束/没开播 → 立刻换；长时间没福袋 → 换
+            if info.get("offline"):
+                return self.rotate_room("直播间已结束/未开播")
+            hold = int(getattr(self.cfg, "giveaway_room_hold_s", 180) or 180)
+            waited = time.time() - self.room_no_bag_since
+            if waited > hold:
+                return self.rotate_room(f"这个房间 {int(waited)} 秒没福袋")
             # 红包留给阶段 3，这里只报告状态
             return {"state": "no-bag", "redpacket": bool(info.get("redpacket")),
-                    "countdown": info.get("countdown", "")}
+                    "countdown": info.get("countdown", ""), "waited": int(waited)}
 
         self._refresh_bag_state(info)
+        self.room_no_bag_since = time.time()      # 看到福袋了，重新计时
         if self._bag.get("handled"):
             return {"state": "already-handled"}       # 这个福袋处理过了，不再开面板
         if time.time() < self._bag.get("next_try", 0):
@@ -923,4 +995,8 @@ class GiveawayBot:
             "failed_total": self.failed_total,
             "last_result": self.last_result,
             "follow_pending": len(self.follow_log),
+            "rooms": len(self.room_queue),
+            "room_pos": (self.room_pos + 1) if self.room_queue else 0,
+            "rotations": self.rotations,
+            "need_manual": self.need_manual,
         }

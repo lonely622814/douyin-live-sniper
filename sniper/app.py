@@ -984,6 +984,8 @@ class Controller:
                     time.sleep(1.5)
                 elif state in ("too-late", "already-handled"):
                     time.sleep(1.0)
+                elif state in ("rotated", "no-rooms", "rotate-failed"):
+                    time.sleep(2.0)
                 else:
                     time.sleep(0.8)
                     if state != "joined":

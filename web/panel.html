@@ -594,13 +594,16 @@ async function tick(){
     const gv = s.giveaway || {};
     if(s.giveaway_on){
       const parts = [];
+      if(gv.rooms > 1) parts.push("第 " + gv.room_pos + "/" + gv.rooms + " 个房间");
       if(gv.room && gv.room !== "-") parts.push(gv.room.slice(0, 10));
       if(gv.countdown && gv.countdown !== "-") parts.push("福袋 " + gv.countdown);
       if(gv.people && gv.people !== "-") parts.push(gv.people.replace("人已参加", "人"));
       parts.push("已参与 " + (gv.joined_today||0));
       $("s-giveaway").textContent = "运行中 · " + parts.join(" · ");
-      $("s-giveaway").title = "总计参与 " + (gv.joined_total||0) + " 个，今日 " + (gv.joined_today||0) +
-        " 个，失败 " + (gv.failed_total||0) + " 次；最近：" + (gv.last_result||"-");
+      $("s-giveaway").title = "房间列表 " + (gv.rooms||0) + " 个，已轮换 " + (gv.rotations||0) +
+        " 次；总计参与 " + (gv.joined_total||0) + " 个，今日 " + (gv.joined_today||0) +
+        " 个，失败 " + (gv.failed_total||0) + " 次；最近：" + (gv.last_result||"-") +
+        (gv.need_manual ? "｜⚠ 有中奖需要你手动领" : "");
       $("s-giveaway").className = "green";
     }else{
       $("s-giveaway").textContent = gv.joined_total
