@@ -84,6 +84,7 @@ class Controller:
         )
         self.giveaway_on = bool(cfg.giveaway_enabled)
         self.armed_paused = False      # 【暂停架枪·完全停手】
+        self._switching = False        # 正在切换直播间（守候/挂机都要让路）
         self.diag(
             f"===== 启动 ===== 房间={cfg.room_url or '(未设置)'} "
             f"刷新间隔={cfg.refresh_interval:g}s 刷新方式={'强制' if cfg.refresh_mode == 'hard' else '普通'} "
@@ -899,7 +900,7 @@ class Controller:
                     started_at = time.monotonic()
                     last_idle_log = 0.0
                     self.log("挂机线程已开始盯直播间（没福袋时会每 60 秒报一次）")
-                if self.armed_paused or self.armed or self._switching:
+                if self.armed_paused or self.armed or getattr(self, "_switching", False):
                     time.sleep(1.0)
                     continue
                 left = self._seconds_to_next_trigger()
@@ -939,6 +940,10 @@ class Controller:
                         last_state_log = state
             except Exception as exc:
                 self.diag(f"挂机异常：{exc}")
+                # 这种异常必须让人看见（原来只写诊断日志，用户完全不知道）
+                self._giveaway_err_count = getattr(self, "_giveaway_err_count", 0) + 1
+                if self._giveaway_err_count <= 3 or self._giveaway_err_count % 60 == 0:
+                    self.log(f"⚠ 挂机循环出错（第 {self._giveaway_err_count} 次）：{exc}")
                 time.sleep(2.0)
 
     def arm_if_needed(self) -> None:
