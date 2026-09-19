@@ -511,6 +511,7 @@ class GiveawayBot:
 
         判定规则：**同一个直播间** + 倒计时**没有突然变大**（变大说明换新福袋了）
           → 同一个福袋；否则算新福袋，重置 handled。
+        容差给 5 秒：正常情况倒计时是往下走的，只有"新一轮福袋开始"才会突然跳大。
         """
         now = time.time()
         left = parse_countdown(info.get("countdown") or "")
@@ -519,7 +520,7 @@ class GiveawayBot:
             st.get("url") == info.get("url")
             and st.get("left") is not None
             and left is not None
-            and left <= st["left"] + 30
+            and left <= st["left"] + 5
         )
         if same:
             st["left"] = left

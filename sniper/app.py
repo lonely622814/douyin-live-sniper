@@ -594,6 +594,16 @@ class Controller:
                 # 所以真正的周期有个下限。
                 interval = max(self.MIN_REFRESH_CYCLE,
                                float(self.cfg.refresh_interval or 1.0))
+                # 【暂停架枪·完全停手】：守候这边彻底不动（不刷新、不判定、不自动送），
+                # 页面保持原样 —— 这才是这个按钮该管的事。
+                if self.armed_paused:
+                    if not getattr(self, "_arm_paused_logged", False):
+                        self._arm_paused_logged = True
+                        self.log("架枪已暂停（完全停手）：不刷新、不判定、不自动送；点【恢复架枪】继续")
+                        self.diag("守候暂停（完全停手）")
+                    time.sleep(1.0)
+                    continue
+                self._arm_paused_logged = False
                 # 监听总开关关掉：不判定、不刷新，也不去动浏览器
                 if not self.cfg.watch_enabled:
                     if self.watch_on:
@@ -900,7 +910,9 @@ class Controller:
                     started_at = time.monotonic()
                     last_idle_log = 0.0
                     self.log("挂机线程已开始盯直播间（没福袋时会每 60 秒报一次）")
-                if self.armed_paused or self.armed or getattr(self, "_switching", False):
+                # 注意：这里**不能**看 armed_paused —— 那个开关只管"架枪/守候"，
+                # 不能连抢福袋一起停掉（踩过：用户一按暂停，新福袋全被漏掉）
+                if self.armed or getattr(self, "_switching", False):
                     time.sleep(1.0)
                     continue
                 left = self._seconds_to_next_trigger()

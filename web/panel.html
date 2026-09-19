@@ -297,7 +297,7 @@
       </div>
       <div class="btnrow two">
         <button class="p1" id="btn-prepare">架枪（打开并准备好）</button>
-        <button id="btn-armpause">暂停架枪 · 完全停手</button>
+        <button id="btn-armpause" title="只停“守候/架枪/刷新/自动送礼”，不影响抢福袋">暂停架枪（只停守候）</button>
       </div>
       <div class="btnrow two">
         <button class="p1" id="btn-giveaway">挂机抢福袋 / 红包</button>
@@ -609,7 +609,7 @@ async function tick(){
       $("s-giveaway").className = "";
     }
     /* 暂停架枪按钮：状态一目了然 */
-    $("btn-armpause").textContent = s.armed_paused ? "恢复架枪" : "暂停架枪 · 完全停手";
+    $("btn-armpause").textContent = s.armed_paused ? "恢复架枪" : "暂停架枪（只停守候）";
     $("btn-armpause").className = s.armed_paused ? "p1" : "";
     /* 开关状态跟着后端同步 */
     if(s.giveaway!==undefined && s.giveaway_on!==undefined){ /* 状态由上面处理 */ }
